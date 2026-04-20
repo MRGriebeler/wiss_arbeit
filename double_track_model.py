@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.optimize import root
 
 class Vehicle:
     def __init__(
@@ -6,7 +7,7 @@ class Vehicle:
         track_back_m: int = 1.5,
         track_front_m: int = 1.5,
         cg_to_front_m: int = 2,
-        cg_to_rear_m: int = 2,
+        cg_to_back_m: int = 2,
         mass_kg: int = 1000,
         yaw_inertia_multiplier: int = 1,
         steer_ratio: int = 1,
@@ -18,8 +19,8 @@ class Vehicle:
         self.track_back_m = track_back_m
         self.track_front_m = track_front_m
         self.cg_to_front_m = cg_to_front_m
-        self.cg_to_rear_m = cg_to_rear_m
-        self.wheelbase_m = cg_to_front_m + cg_to_rear_m
+        self.cg_to_back_m = cg_to_back_m
+        self.wheelbase_m = cg_to_front_m + cg_to_back_m
         self.mass_kg = mass_kg
         self.yaw_inertia_multiplier = yaw_inertia_multiplier
         
@@ -38,6 +39,7 @@ class Vehicle:
         self.ackermann_factor = ackermann_factor
 
     def calculate_inertia(
+        self,
         track_front_m: int,
         track_back_m: int,
         wheelbase_m: int,
@@ -48,7 +50,7 @@ class Vehicle:
         Yaw inertia is calculated based on the moment of inertia of a rectangle
         with the previously informed dimensions
         '''
-        track_mean_m = np.mean(track_front_m, track_back_m)
+        track_mean_m = np.mean([track_front_m, track_back_m])
         yaw_inertia_kgm2 = 1/12*mass_kg*(track_mean_m**2 + wheelbase_m**2)
         yaw_inertia_kgm2 = yaw_inertia_multiplier*yaw_inertia_kgm2
 
@@ -88,7 +90,7 @@ class VehicleState:
         
         # First Guess of Vehicle state parameters
         self.path_radius_m = car.wheelbase_m/self.steer_after_rack_rad
-        self.side_slip_rad = car.cg_to_rear_m/self.path_radius_m
+        self.side_slip_rad = car.cg_to_back_m/self.path_radius_m
 
         # Initialization of wheel/tire angles
         self.steer_fl_rad = 0
@@ -122,7 +124,7 @@ class VehicleState:
         self.steer_fl_rad = np.atan2(L/R,ack*factor_left)
         self.steer_fr_rad = np.atan2(L/R,ack*factor_right)
         
-        b = self.car.cg_to_rear_m
+        b = self.car.cg_to_back_m
         toe_b = self.car.toe_back_rad
 
         # Tire slip angles (Rear)
@@ -165,25 +167,54 @@ class VehicleState:
         self.forceX_fr_N = Cf*(self.alpha_fr_rad*np.sin(d_fr+toe_f))
     
     def calc_static_solution(self):
-        self.calc_wheel_angles()
-        self.calc_forces()
 
-        # Rotate forces to tangential-normal coordinates to velocity vector
-        to_normal = lambda x,y,ang: x*np.sin(ang) + y*np.cos(ang) 
-        
-        force_norm_fl = \
-            to_normal(self.forceX_fl_N, self.forceY_fl_N, self.side_slip_rad)
-        force_norm_fr = \
-            to_normal(self.forceX_fr_N, self.forceY_fr_N, self.side_slip_rad)
-        force_norm_bl = \
-            to_normal(self.forceX_bl_N, self.forceY_bl_N, self.side_slip_rad)
-        force_norm_br = \
-            to_normal(self.forceX_br_N, self.forceY_br_N, self.side_slip_rad)
-        
-        force_centrifugal = \
-            force_norm_fl + force_norm_fr + force_norm_bl + force_norm_br
-        
-        force_centrifugal = \
-            self.car.mass_kg*self.velocity_mps**2/self.path_radius_m
+        def objective_function(x):
+            self.path_radius_m = x[0]
+            self.side_slip_rad = x[1]
 
+            self.calc_wheel_angles()
+            self.calc_forces()
+
+            # Rotate forces to tangential-normal coordinates to velocity vector
+            to_normal = lambda x,y,ang: x*np.sin(ang) + y*np.cos(ang) 
+            
+            force_norm_fl = \
+                to_normal(self.forceX_fl_N, self.forceY_fl_N, self.side_slip_rad)
+            force_norm_fr = \
+                to_normal(self.forceX_fr_N, self.forceY_fr_N, self.side_slip_rad)
+            force_norm_bl = \
+                to_normal(self.forceX_bl_N, self.forceY_bl_N, self.side_slip_rad)
+            force_norm_br = \
+                to_normal(self.forceX_br_N, self.forceY_br_N, self.side_slip_rad)
+            
+            # Dynamical equilibrium condition for normal forces
+            force_centripetal = \
+                force_norm_fl + force_norm_fr + force_norm_bl + force_norm_br
+            force_centrifugal = \
+                self.car.mass_kg*self.velocity_mps**2/self.path_radius_m
+            
+            # Dynamical equilibrium condition for yaw moment
+            yaw_moment = \
+                + self.car.cg_to_front_m*self.forceY_fl_N \
+                - self.car.track_front_m/2*self.forceX_fl_N \
+                + self.car.cg_to_front_m*self.forceY_fr_N \
+                + self.car.track_front_m/2*self.forceX_fr_N \
+                - self.car.cg_to_back_m*self.forceY_bl_N \
+                - self.car.track_back_m/2*self.forceX_bl_N \
+                - self.car.cg_to_back_m*self.forceY_br_N \
+                + self.car.track_back_m/2*self.forceX_br_N
+            
+            return [force_centripetal - force_centrifugal, yaw_moment]
         
+        x0 = [self.path_radius_m, self.side_slip_rad]
+        sol = root(objective_function, x0 = x0)
+        print(f"Root found at: sol.x")
+
+if __name__ == "__main__":
+    car = Vehicle()
+    tire_front = Tire()
+    tire_rear = Tire()
+    vehicle_state = VehicleState(velocity_mps=20, steer_before_rack_rad=0.87, 
+                        car=car, tire_front=tire_front, tire_rear=tire_rear)
+    
+    vehicle_state.calc_static_solution()
