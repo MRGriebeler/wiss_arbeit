@@ -75,27 +75,25 @@ class Simulation:
     '''
     def __init__(
         self,
-        velocity_kph: int,
-        steer_before_rack_deg: int,
         car: Vehicle,
         tire_front: Tire,
         tire_rear: Tire
     ):
-        self.velocity_kph = velocity_kph
-        self.velocity_mps = velocity_kph/3.6
-        self.steer_before_rack_deg = steer_before_rack_deg
-        self.steer_before_rack_rad = np.deg2rad(self.steer_before_rack_deg)
         self.car = car
         self.tire_front = tire_front
         self.tire_rear = tire_rear
-        self.steer_after_rack_deg = self.steer_before_rack_deg/car.steer_ratio
-        self.steer_after_rack_rad = self.steer_before_rack_rad/car.steer_ratio
         
-        # First Guess of Vehicle state parameters
-        self.path_radius_m = car.wheelbase_m/self.steer_after_rack_rad
-        self.side_slip_rad = car.cg_to_back_m/self.path_radius_m
-        self.side_slip_deg = np.rad2deg(self.side_slip_rad)
-        self.accel_cent_mps2 = self.velocity_mps**2/self.path_radius_m
+        # Initialization of vehicle state variables
+        self.velocity_kph = 0
+        self.velocity_mps = 0
+        self.steer_before_rack_deg = 0
+        self.steer_before_rack_rad = 0
+        self.steer_after_rack_deg = 0
+        self.steer_after_rack_rad = 0
+        self.path_radius_m = 0
+        self.side_slip_rad = 0
+        self.side_slip_deg = 0
+        self.accel_cent_mps2 = 0
 
         # Initialization of wheel/tire angles
         self.steer_fl_rad = 0
@@ -129,11 +127,17 @@ class Simulation:
         self.yaw_moment_Nm = 0
 
     def calc_wheel_angles(self):
+
         steer = self.steer_after_rack_rad
         beta = self.side_slip_rad
         T_f = self.car.track_front_m
         R = self.path_radius_m
         ack = self.car.ackermann_factor
+        self.accel_cent_mps2 = self.velocity_mps**2/R
+        
+        # Conversion to degrees
+        self.steer_after_rack_deg = np.rad2deg(self.steer_after_rack_rad)
+        self.side_slip_deg = np.rad2deg(self.side_slip_rad)
         
         # Steering angle from individual wheels
         self.steer_fl_rad = np.atan2(steer, np.cos(beta) - ack*T_f/(2*R))
@@ -175,7 +179,7 @@ class Simulation:
         self.alpha_fl_deg = np.rad2deg(self.alpha_fl_rad)
         self.alpha_fr_deg = np.rad2deg(self.alpha_fr_rad)
 
-    def calc_forces(self):
+    def calc_tire_forces(self):
 
         Cr = self.tire_rear.cornering_stiffness_NperRad
         toe_b = self.car.toe_back_rad
@@ -197,50 +201,121 @@ class Simulation:
         self.forceY_fr_N = -Cf*(self.alpha_fr_rad*np.cos(d_fr+toe_f))
         self.forceX_fr_N = -Cf*(self.alpha_fr_rad*np.sin(d_fr+toe_f))
     
-    def calc_static_solution(self):
+    def calc_yaw_moment(self):
+        self.yaw_moment_Nm = \
+            + self.car.cg_to_front_m*self.forceY_fl_N \
+            - self.car.track_front_m/2*self.forceX_fl_N \
+            + self.car.cg_to_front_m*self.forceY_fr_N \
+            + self.car.track_front_m/2*self.forceX_fr_N \
+            - self.car.cg_to_back_m*self.forceY_bl_N \
+            - self.car.track_back_m/2*self.forceX_bl_N \
+            - self.car.cg_to_back_m*self.forceY_br_N \
+            + self.car.track_back_m/2*self.forceX_br_N
+        
+    def calc_force_centripetal(self):
+        # Rotate forces to tangential-normal coordinates w.r.t. velocity vector
+        to_normal = lambda x,y,ang: x*np.sin(ang) + y*np.cos(ang) 
+        
+        force_norm_fl = \
+            to_normal(self.forceX_fl_N, self.forceY_fl_N, self.side_slip_rad)
+        force_norm_fr = \
+            to_normal(self.forceX_fr_N, self.forceY_fr_N, self.side_slip_rad)
+        force_norm_bl = \
+            to_normal(self.forceX_bl_N, self.forceY_bl_N, self.side_slip_rad)
+        force_norm_br = \
+            to_normal(self.forceX_br_N, self.forceY_br_N, self.side_slip_rad)
+        
+        self.force_centripetal_N = \
+            force_norm_fl + force_norm_fr + force_norm_bl + force_norm_br
 
+    def find_stationary_point(self,
+                              state1_name: str,
+                              state1_value_SI: int,
+                              state2_name: str,
+                              state2_value_SI: int,
+                              state3_name: str = None,
+                              state3_initial_guess_SI: int = None,
+                              state4_name: str = None,
+                              state4_initial_guess_SI: int = None):
+        
+        def validate_state_input(input, valid_state_names):
+            """ Validate whether 'state' has unique partial 
+            match in the valid_state_input"""
+
+            matches = [state for state in valid_state_names 
+                       if state.startswith(input.lower())]
+            
+            if len(matches) == 0:
+                raise ValueError(f"No match found for '{input}'. \
+                                 Options: {valid_state_names}")
+            elif len(matches) > 1:
+                raise ValueError(f"Ambiguous match '{input}'. \
+                                 Could be {matches}")
+            
+            return matches[0]
+        
         def objective_function(x):
-            self.path_radius_m = x[0]
-            self.side_slip_rad = x[1]
-            self.side_slip_deg = np.rad2deg(self.side_slip_rad)
-            self.accel_cent_mps2 = self.velocity_mps**2/self.path_radius_m
+
+            setattr(self, states_dict[state3_name], x[0])
+            setattr(self, states_dict[state4_name], x[1])
 
             self.calc_wheel_angles()
-            self.calc_forces()
+            self.calc_tire_forces()
+            self.calc_force_centripetal()
 
-            # Rotate forces to tangential-normal coordinates to velocity vector
-            to_normal = lambda x,y,ang: x*np.sin(ang) + y*np.cos(ang) 
-            
-            force_norm_fl = \
-                to_normal(self.forceX_fl_N, self.forceY_fl_N, self.side_slip_rad)
-            force_norm_fr = \
-                to_normal(self.forceX_fr_N, self.forceY_fr_N, self.side_slip_rad)
-            force_norm_bl = \
-                to_normal(self.forceX_bl_N, self.forceY_bl_N, self.side_slip_rad)
-            force_norm_br = \
-                to_normal(self.forceX_br_N, self.forceY_br_N, self.side_slip_rad)
-            
-            # Dynamical equilibrium condition for normal forces
-            self.force_centripetal_N = \
-                force_norm_fl + force_norm_fr + force_norm_bl + force_norm_br
             self.force_centrifugal_N = \
                 self.car.mass_kg*self.velocity_mps**2/self.path_radius_m
             
-            # Dynamical equilibrium condition for yaw moment
-            self.yaw_moment_Nm = \
-                + self.car.cg_to_front_m*self.forceY_fl_N \
-                - self.car.track_front_m/2*self.forceX_fl_N \
-                + self.car.cg_to_front_m*self.forceY_fr_N \
-                + self.car.track_front_m/2*self.forceX_fr_N \
-                - self.car.cg_to_back_m*self.forceY_bl_N \
-                - self.car.track_back_m/2*self.forceX_bl_N \
-                - self.car.cg_to_back_m*self.forceY_br_N \
-                + self.car.track_back_m/2*self.forceX_br_N
+            centrip_minus_centrif = \
+                self.force_centripetal_N - self.force_centrifugal_N
             
-            return [self.force_centripetal_N - self.force_centrifugal_N,
-                     self.yaw_moment_Nm]
+            self.calc_yaw_moment()
+            
+            return [centrip_minus_centrif, self.yaw_moment_Nm]
         
-        x0 = [self.path_radius_m, self.side_slip_rad]
+        valid_state_names = \
+            ["velocity", "steering", "radius", "sideslip"]
+
+        state1_name = validate_state_input(state1_name, valid_state_names)
+        state2_name = validate_state_input(state2_name, valid_state_names)
+
+        states_dict = {
+                    "radius": "path_radius_m",
+                    "sideslip": "side_slip_rad",
+                    "velocity": "velocity_mps",
+                    "steering": "steer_after_rack_rad",
+                }
+
+        setattr(self, states_dict[state1_name], state1_value_SI)
+        setattr(self, states_dict[state2_name], state2_value_SI)
+
+        initial_guesses_dict = {
+            "radius": 30,
+            "sideslip": np.deg2rad(-5),
+            "velocity": 50/3.6,
+            "steering": np.deg2rad(20),
+        }
+        
+        states3and4 = [x for x in valid_state_names 
+                       if x not in [state1_name, state2_name]]
+
+        if state3_name == None:           
+            state3_name = states3and4[0]
+            state3_initial_guess_SI = initial_guesses_dict[state3_name]
+        else:
+            state3_name = validate_state_input(state3_name, 
+                                               valid_state_names=states3and4)
+            
+        if state4_name == None:
+            state4_name = states3and4[1]
+            state4_initial_guess_SI = initial_guesses_dict[state4_name]
+        else:
+            state4_name = validate_state_input(state4_name,
+                                               valid_state_names=states3and4)
+
+
+        x0 = [state3_initial_guess_SI, state4_initial_guess_SI]
+        
         sol = root(objective_function, x0 = x0)
         print(f"Root found at: sol.x")
 
@@ -248,7 +323,11 @@ if __name__ == "__main__":
     car = Vehicle(cg_to_front_m=2, cg_to_back_m=2)
     tire_front = Tire(cornering_stiffness_NperRad=20000)
     tire_rear = Tire()
-    simulation = Simulation(velocity_kph=100, steer_before_rack_deg=0.5, 
-                        car=car, tire_front=tire_front, tire_rear=tire_rear)
+    simulation = Simulation(car=car,
+                            tire_front=tire_front,
+                            tire_rear=tire_rear)
     
-    simulation.calc_static_solution()
+    simulation.find_stationary_point(state1_name="steer",
+                                     state1_value_SI=np.deg2rad(10),
+                                     state2_name="vel",
+                                     state2_value_SI=70/3.6)
