@@ -201,6 +201,17 @@ class Simulation:
         
         self.forceY_fr_N = -Cf*(self.alpha_fr_rad*np.cos(d_fr+toe_f))
         self.forceX_fr_N = -Cf*(self.alpha_fr_rad*np.sin(d_fr+toe_f))
+
+        to_normal = lambda x,y,ang: x*np.sin(ang) + y*np.cos(ang)
+
+        self.force_norm_fl = \
+            to_normal(self.forceX_fl_N, self.forceY_fl_N, self.side_slip_rad)
+        self.force_norm_fr = \
+            to_normal(self.forceX_fr_N, self.forceY_fr_N, self.side_slip_rad)
+        self.force_norm_bl = \
+            to_normal(self.forceX_bl_N, self.forceY_bl_N, self.side_slip_rad)
+        self.force_norm_br = \
+            to_normal(self.forceX_br_N, self.forceY_br_N, self.side_slip_rad)
     
     def calc_yaw_moment(self):
         self.yaw_moment_Nm = \
@@ -212,22 +223,6 @@ class Simulation:
             - self.car.track_back_m/2*self.forceX_bl_N \
             - self.car.cg_to_back_m*self.forceY_br_N \
             + self.car.track_back_m/2*self.forceX_br_N
-        
-    def calc_force_centripetal(self):
-        # Rotate forces to tangential-normal coordinates w.r.t. velocity vector
-        to_normal = lambda x,y,ang: x*np.sin(ang) + y*np.cos(ang) 
-        
-        force_norm_fl = \
-            to_normal(self.forceX_fl_N, self.forceY_fl_N, self.side_slip_rad)
-        force_norm_fr = \
-            to_normal(self.forceX_fr_N, self.forceY_fr_N, self.side_slip_rad)
-        force_norm_bl = \
-            to_normal(self.forceX_bl_N, self.forceY_bl_N, self.side_slip_rad)
-        force_norm_br = \
-            to_normal(self.forceX_br_N, self.forceY_br_N, self.side_slip_rad)
-        
-        self.force_centripetal_N = \
-            force_norm_fl + force_norm_fr + force_norm_bl + force_norm_br
 
     def visualize_vehicle_state(self):
         
@@ -237,7 +232,6 @@ class Simulation:
         local_variables = locals()
         if 'fig' not in local_variables and 'ax' not in local_variables:
             fig, ax = plt.subplots()
-            plt.show()
 
         a = self.car.cg_to_front_m
         b = self.car.cg_to_back_m
@@ -275,17 +269,31 @@ class Simulation:
                 rot_y_pts(x_in_car_ref, y_in_car_ref, np.pi/2 + self.side_slip_rad)
 
             inputs = (x_in_glob_ref, y_in_glob_ref)
-            wheel_lines.append(ax.plot(*inputs))
+            wheel_lines.append(ax.plot(*inputs, color='black'))
+        
+        ax.annotate(
+            text = '',
+            xy = (self.forceX_fl_N/1000, self.forceY_fl_N/1000),
+            xytext = (x_in_glob_ref[1], y_in_glob_ref[1]),
+            arrowprops = dict(facecolor = 'crimson',
+                              edgecolor = 'blue',
+                              shrink = 0)
+            )
+
+        ax.set_aspect('equal')
+        ax.grid(visible=True)
+        fig.show()
+        print()
 
     def find_stationary_point(self,
                               state1_name: str,
                               state1_value_SI: float,
                               state2_name: str,
                               state2_value_SI: float,
-                              state3_name: str = None,
-                              state3_initial_guess_SI: float = None,
-                              state4_name: str = None,
-                              state4_initial_guess_SI: float = None):
+                              state3_name = None,
+                              state3_initial_guess_SI = None,
+                              state4_name = None,
+                              state4_initial_guess_SI = None):
         
         def validate_state_input(input, valid_state_names):
             """ Validate whether 'state' has unique partial 
@@ -310,7 +318,10 @@ class Simulation:
 
             self.calc_wheel_angles()
             self.calc_tire_forces()
-            self.calc_force_centripetal()
+
+            self.force_centripetal_N = \
+                self.force_norm_fl + self.force_norm_fr + \
+                    self.force_norm_bl + self.force_norm_br
 
             self.force_centrifugal_N = \
                 self.car.mass_kg*self.velocity_mps**2/self.path_radius_m
@@ -367,7 +378,6 @@ class Simulation:
         
         sol = root(objective_function, x0 = x0)
         self.visualize_vehicle_state()
-        print(f"Root found at: sol.x")
 
 if __name__ == "__main__":
     car = Vehicle(cg_to_front_m=2.0, cg_to_back_m=2.0)
