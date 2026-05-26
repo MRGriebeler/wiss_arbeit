@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.optimize import root
 import matplotlib.pyplot as plt
+from typing import Any
 
 class Vehicle:
     def __init__(
@@ -46,7 +47,7 @@ class Vehicle:
         wheelbase_m: float,
         mass_kg: float,
         yaw_inertia_multiplier: float
-        ) -> float:
+        ) -> np.floating[Any]:
         '''
         Yaw inertia is calculated based on the moment of inertia of a rectangle
         with the previously informed dimensions
@@ -238,47 +239,98 @@ class Simulation:
         wf = self.car.track_front_m
         wb = self.car.track_back_m
 
-        body_pts_x_m = np.array([-b, -b, -b, a, a, a])
-        body_pts_y_m = np.array([-wb/2, +wb/2, 0.0, 0.0, -wf/2, +wf/2])
+        body_x_for_plot = np.array([+a,+a,+a,-b,-b,-b])
+        body_y_for_plot = np.array([+wf/2,-wf/2,0,0,+wb/2,-wb/2])
 
-        x_in_glob_ref = \
-            rot_x_pts(body_pts_x_m, body_pts_y_m, np.pi/2 + self.side_slip_rad)
-        y_in_glob_ref = \
-            rot_y_pts(body_pts_x_m, body_pts_y_m, np.pi/2 + self.side_slip_rad)
+        vel_dir_glob_ref_rad = np.pi/2 + self.side_slip_rad
 
-        inputs = (x_in_glob_ref, y_in_glob_ref)
-        body_lines = ax.plot(*inputs)
+        body_x_for_plot_glob_ref = \
+            rot_x_pts(body_x_for_plot,
+                      body_y_for_plot,
+                      vel_dir_glob_ref_rad)
+        
+        body_y_for_plot_glob_ref = \
+            rot_y_pts(body_x_for_plot,
+                      body_y_for_plot,
+                      vel_dir_glob_ref_rad)
 
-        wheel_pts_x_m = np.array([+0.5, +0.5, -0.5, -0.5, +0.5])
-        wheel_pts_y_m = np.array([-0.2, +0.2, +0.2, -0.2, -0.2])
+        inputs = (body_x_for_plot_glob_ref, body_y_for_plot_glob_ref)
+        
+        body_lines_glob_ref = ax.plot(*inputs)
+
+        body_pts_x_m = np.array([+a,+a,-b,-b])
+        body_pts_y_m = np.array([+wf/2,-wf/2,-wb/2,+wb/2])
+
+        body_x_glob_ref = \
+            rot_x_pts(body_pts_x_m,
+                      body_pts_y_m,
+                      vel_dir_glob_ref_rad)
+        
+        body_y_glob_ref = \
+            rot_y_pts(body_pts_x_m,
+                      body_pts_y_m,
+                      vel_dir_glob_ref_rad)
+        
+        wheel_pts_x_m = np.array([+0.5, +0.5, -0.5, -0.5])
+        wheel_pts_y_m = np.array([-0.2, +0.2, +0.2, -0.2])
         wheel_angle_rad = [self.steer_fl_rad, self.steer_fr_rad, 0, 0]
 
         wheel_lines = list()
-        for x_shift, y_shift, ang in zip([+a,+a,-b,-b],
-                                         [+wf/2,-wf/2,+wb/2,-wb/2],
+        for x_shift, y_shift, ang in zip(body_pts_x_m,
+                                         body_pts_y_m,
                                          wheel_angle_rad):
             
-            x_in_car_ref = x_shift + \
+            wheel_x_car_ref = x_shift + \
                 rot_x_pts(wheel_pts_x_m, wheel_pts_y_m, ang)
-            y_in_car_ref = y_shift + \
+            wheel_y_car_ref = y_shift + \
                 rot_y_pts(wheel_pts_x_m, wheel_pts_y_m, ang)
             
-            x_in_glob_ref = \
-                rot_x_pts(x_in_car_ref, y_in_car_ref, np.pi/2 + self.side_slip_rad)
-            y_in_glob_ref = \
-                rot_y_pts(x_in_car_ref, y_in_car_ref, np.pi/2 + self.side_slip_rad)
+            wheel_x_glob_ref = \
+                rot_x_pts(wheel_x_car_ref,
+                          wheel_y_car_ref,
+                          vel_dir_glob_ref_rad)
+            wheel_y_glob_ref = \
+                rot_y_pts(wheel_x_car_ref,
+                          wheel_y_car_ref,
+                          vel_dir_glob_ref_rad)
 
-            inputs = (x_in_glob_ref, y_in_glob_ref)
+            inputs = (np.append(wheel_x_glob_ref, wheel_x_glob_ref[0]),
+                      np.append(wheel_y_glob_ref, wheel_y_glob_ref[0]))
+            
             wheel_lines.append(ax.plot(*inputs, color='black'))
+
+        wheel_forcesX = [self.forceX_fl_N,
+                         self.forceX_fr_N,
+                         self.forceX_br_N,
+                         self.forceX_bl_N]
         
-        ax.annotate(
-            text = '',
-            xy = (self.forceX_fl_N/1000, self.forceY_fl_N/1000),
-            xytext = (x_in_glob_ref[1], y_in_glob_ref[1]),
-            arrowprops = dict(facecolor = 'crimson',
-                              edgecolor = 'blue',
-                              shrink = 0)
-            )
+        wheel_forcesY = [self.forceY_fl_N,
+                         self.forceY_fr_N,
+                         self.forceY_br_N,
+                         self.forceY_bl_N]
+
+        for forceX, forceY, locationX, locationY in zip(wheel_forcesX,
+                                                        wheel_forcesY,
+                                                        body_x_glob_ref,
+                                                        body_y_glob_ref):
+        
+            forceX_glob_ref = rot_x_pts(forceX,
+                                        forceY,
+                                        vel_dir_glob_ref_rad)
+            
+            forceY_glob_ref = rot_y_pts(forceX,
+                                        forceY,
+                                        vel_dir_glob_ref_rad)
+
+            ax.annotate(
+                text = '', #f'{np.hypot(self.forceX_fl_N, self.forceY_fl_N)}',
+                xy = (locationX + forceX_glob_ref/1000, 
+                    locationY + forceY_glob_ref/1000),
+                xytext = (locationX, locationY),
+                arrowprops = dict(facecolor = 'crimson',
+                                edgecolor = 'blue',
+                                shrink = 0)
+                )
 
         ax.set_aspect('equal')
         ax.grid(visible=True)
@@ -388,6 +440,6 @@ if __name__ == "__main__":
                             tire_rear=tire_rear)
     
     simulation.find_stationary_point(state1_name="steer",
-                                     state1_value_SI=np.deg2rad(30),
+                                     state1_value_SI=np.deg2rad(25),
                                      state2_name="vel",
                                      state2_value_SI=20/3.6)
