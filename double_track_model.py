@@ -158,24 +158,22 @@ class Simulation:
 
         # Tire slip angles (Rear)
         self.alpha_bl_rad = \
-            np.atan2(np.sin(beta) + b/R + toe_b*factor_left, factor_left)
+            np.atan2(np.sin(beta) + b/R, factor_left) + toe_b*np.sign(R)
         self.alpha_br_rad = \
-            np.atan2(np.sin(beta) + b/R - toe_b*factor_right, factor_right)
+            np.atan2(np.sin(beta) + b/R, factor_right) - toe_b*np.sign(R)
         
         # Conversion to degrees
         self.alpha_bl_deg = np.rad2deg(self.alpha_bl_rad)
         self.alpha_br_deg = np.rad2deg(self.alpha_br_rad)
 
         a = self.car.cg_to_front_m
-        d_fr = self.steer_fr_rad
-        d_fl = self.steer_fl_rad
         toe_f = self.car.toe_front_rad
 
         # Tire slip angles (Front)
-        self.alpha_fl_rad = np.atan2(np.sin(beta) - 
-                            a/R + (d_fl - toe_f)*factor_left, factor_left)
+        self.alpha_fl_rad = np.atan2(np.sin(beta) - \
+                            a/R + steer, factor_left) + toe_f*np.sign(R)
         self.alpha_fr_rad = np.atan2(np.sin(beta) - 
-                            a/R + (d_fr + toe_f)*factor_right, factor_right)
+                            a/R + steer, factor_right) - toe_f*np.sign(R)
         
         # Conversion to degrees
         self.alpha_fl_deg = np.rad2deg(self.alpha_fl_rad)
@@ -186,22 +184,22 @@ class Simulation:
         Cr = self.tire_rear.cornering_stiffness_NperRad
         toe_b = self.car.toe_back_rad
         
-        self.forceY_bl_N = -Cr*(self.alpha_bl_rad)*np.cos(toe_b)
-        self.forceX_bl_N = -Cr*(self.alpha_bl_rad)*np.sin(toe_b)
+        self.forceY_bl_N = -Cr*(self.alpha_bl_rad)*np.sin(np.pi/2 - toe_b)
+        self.forceX_bl_N = -Cr*(self.alpha_bl_rad)*np.cos(np.pi/2 - toe_b)
         
-        self.forceY_br_N = -Cr*(self.alpha_br_rad)*np.cos(toe_b)
-        self.forceX_br_N = -Cr*(self.alpha_br_rad)*np.sin(toe_b)
+        self.forceY_br_N = -Cr*(self.alpha_br_rad)*np.sin(np.pi/2 + toe_b)
+        self.forceX_br_N = -Cr*(self.alpha_br_rad)*np.cos(np.pi/2 + toe_b)
 
         Cf = self.tire_front.cornering_stiffness_NperRad
         toe_f = self.car.toe_front_rad
         d_fl = self.steer_fl_rad
         d_fr = self.steer_fr_rad
         
-        self.forceY_fl_N = -Cf*(self.alpha_fl_rad*np.cos(d_fl-toe_f))
-        self.forceX_fl_N = -Cf*(self.alpha_fl_rad*np.sin(d_fl-toe_f))
+        self.forceY_fl_N = -Cf*(self.alpha_fl_rad*np.sin(np.pi/2 + d_fl - toe_f))
+        self.forceX_fl_N = -Cf*(self.alpha_fl_rad*np.cos(np.pi/2 + d_fl - toe_f))
         
-        self.forceY_fr_N = -Cf*(self.alpha_fr_rad*np.cos(d_fr+toe_f))
-        self.forceX_fr_N = -Cf*(self.alpha_fr_rad*np.sin(d_fr+toe_f))
+        self.forceY_fr_N = -Cf*(self.alpha_fr_rad*np.sin(np.pi/2 + d_fr + toe_f))
+        self.forceX_fr_N = -Cf*(self.alpha_fr_rad*np.cos(np.pi/2 + d_fr + toe_f))
 
         to_normal = lambda x,y,ang: x*np.sin(ang) + y*np.cos(ang)
 
@@ -272,8 +270,15 @@ class Simulation:
                       vel_dir_glob_ref_rad)
         
         wheel_pts_x_m = np.array([+0.5, +0.5, -0.5, -0.5])
-        wheel_pts_y_m = np.array([-0.2, +0.2, +0.2, -0.2])
-        wheel_angle_rad = [self.steer_fl_rad, self.steer_fr_rad, 0, 0]
+        wheel_pts_y_m = np.array([+0.2, -0.2, -0.2, +0.2])
+        
+        R = self.path_radius_m
+        
+        wheel_angle_rad = [
+            self.steer_fl_rad - np.sign(R)*self.car.toe_front_rad,
+            self.steer_fr_rad + np.sign(R)*self.car.toe_front_rad,
+            +np.sign(self.steer_fr_rad)*self.car.toe_back_rad,
+            -np.sign(self.steer_fl_rad)*self.car.toe_back_rad]
 
         wheel_lines = list()
         for x_shift, y_shift, ang in zip(body_pts_x_m,
@@ -432,7 +437,11 @@ class Simulation:
         self.visualize_vehicle_state()
 
 if __name__ == "__main__":
-    car = Vehicle(cg_to_front_m=2.0, cg_to_back_m=2.0)
+    car = Vehicle(cg_to_front_m = 2.0,
+                  cg_to_back_m = 2.0,
+                  toe_front_deg = 1.0,
+                  toe_back_deg = 1.0)
+    
     tire_front = Tire(cornering_stiffness_NperRad=20000)
     tire_rear = Tire()
     simulation = Simulation(car=car,
@@ -442,4 +451,4 @@ if __name__ == "__main__":
     simulation.find_stationary_point(state1_name="steer",
                                      state1_value_SI=np.deg2rad(25),
                                      state2_name="vel",
-                                     state2_value_SI=20/3.6)
+                                     state2_value_SI=30/3.6)
