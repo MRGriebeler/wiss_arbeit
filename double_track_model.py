@@ -86,6 +86,10 @@ class Simulation:
         self.tire_rear = tire_rear
         
         # Initialization of vehicle state variables
+        self.position_x_m = 0
+        self.position_y_m = 0
+        self.yaw_angle_deg = 90
+        self.yaw_angle_rad = np.deg2rad(self.yaw_angle_deg)
         self.velocity_kph = 0
         self.velocity_mps = 0
         self.steer_before_rack_deg = 0
@@ -142,8 +146,10 @@ class Simulation:
         self.side_slip_deg = np.rad2deg(self.side_slip_rad)
         
         # Steering angle from individual wheels
-        self.steer_fl_rad = np.atan2(steer, np.cos(beta) - ack*T_f/(2*R))
-        self.steer_fr_rad = np.atan2(steer, np.cos(beta) + ack*T_f/(2*R))
+        self.steer_fl_rad = np.atan2(steer, 1    - ack*T_f/(2*R))
+        self.steer_fr_rad = np.atan2(steer, 1 + ack*T_f/(2*R))
+        # TO DO - sign inversion should depend on the steering sign instead
+        # of curvature radius sign
 
         # Conversion to degrees
         self.steer_fl_deg = np.rad2deg(self.steer_fl_rad)
@@ -158,9 +164,9 @@ class Simulation:
 
         # Tire slip angles (Rear)
         self.alpha_bl_rad = \
-            np.atan2(np.sin(beta) + b/R, factor_left) + toe_b*np.sign(R)
+            np.atan2(np.sin(beta) - b/R, factor_left) + toe_b*np.sign(R)
         self.alpha_br_rad = \
-            np.atan2(np.sin(beta) + b/R, factor_right) - toe_b*np.sign(R)
+            np.atan2(np.sin(beta) - b/R, factor_right) - toe_b*np.sign(R)
         
         # Conversion to degrees
         self.alpha_bl_deg = np.rad2deg(self.alpha_bl_rad)
@@ -170,10 +176,10 @@ class Simulation:
         toe_f = self.car.toe_front_rad
 
         # Tire slip angles (Front)
-        self.alpha_fl_rad = np.atan2(np.sin(beta) - \
-                            a/R + steer, factor_left) + toe_f*np.sign(R)
-        self.alpha_fr_rad = np.atan2(np.sin(beta) - 
-                            a/R + steer, factor_right) - toe_f*np.sign(R)
+        self.alpha_fl_rad = np.atan2(np.sin(beta) + a/R, factor_left) \
+            - self.steer_fl_rad + toe_f*np.sign(R)
+        self.alpha_fr_rad = np.atan2(np.sin(beta) + a/R, factor_right) \
+            - self.steer_fr_rad - toe_f*np.sign(R)
         
         # Conversion to degrees
         self.alpha_fl_deg = np.rad2deg(self.alpha_fl_rad)
@@ -183,6 +189,7 @@ class Simulation:
 
         Cr = self.tire_rear.cornering_stiffness_NperRad
         toe_b = self.car.toe_back_rad
+        R = self.path_radius_m
         
         self.forceY_bl_N = -Cr*(self.alpha_bl_rad)*np.sin(np.pi/2 - toe_b)
         self.forceX_bl_N = -Cr*(self.alpha_bl_rad)*np.cos(np.pi/2 - toe_b)
@@ -240,17 +247,17 @@ class Simulation:
         body_x_for_plot = np.array([+a,+a,+a,-b,-b,-b])
         body_y_for_plot = np.array([+wf/2,-wf/2,0,0,+wb/2,-wb/2])
 
-        vel_dir_glob_ref_rad = np.pi/2 + self.side_slip_rad
+        vel_dir_glob_ref_rad = self.yaw_angle_rad + self.side_slip_rad
 
         body_x_for_plot_glob_ref = \
             rot_x_pts(body_x_for_plot,
                       body_y_for_plot,
-                      vel_dir_glob_ref_rad)
+                      self.yaw_angle_rad)
         
         body_y_for_plot_glob_ref = \
             rot_y_pts(body_x_for_plot,
                       body_y_for_plot,
-                      vel_dir_glob_ref_rad)
+                      self.yaw_angle_rad)
 
         inputs = (body_x_for_plot_glob_ref, body_y_for_plot_glob_ref)
         
@@ -262,12 +269,12 @@ class Simulation:
         body_x_glob_ref = \
             rot_x_pts(body_pts_x_m,
                       body_pts_y_m,
-                      vel_dir_glob_ref_rad)
+                      self.yaw_angle_rad)
         
         body_y_glob_ref = \
             rot_y_pts(body_pts_x_m,
                       body_pts_y_m,
-                      vel_dir_glob_ref_rad)
+                      self.yaw_angle_rad)
         
         wheel_pts_x_m = np.array([+0.5, +0.5, -0.5, -0.5])
         wheel_pts_y_m = np.array([+0.2, -0.2, -0.2, +0.2])
@@ -293,11 +300,11 @@ class Simulation:
             wheel_x_glob_ref = \
                 rot_x_pts(wheel_x_car_ref,
                           wheel_y_car_ref,
-                          vel_dir_glob_ref_rad)
+                          self.yaw_angle_rad)
             wheel_y_glob_ref = \
                 rot_y_pts(wheel_x_car_ref,
                           wheel_y_car_ref,
-                          vel_dir_glob_ref_rad)
+                          self.yaw_angle_rad)
 
             inputs = (np.append(wheel_x_glob_ref, wheel_x_glob_ref[0]),
                       np.append(wheel_y_glob_ref, wheel_y_glob_ref[0]))
@@ -314,6 +321,7 @@ class Simulation:
                          self.forceY_br_N,
                          self.forceY_bl_N]
 
+        force_graphics = list()
         for forceX, forceY, locationX, locationY in zip(wheel_forcesX,
                                                         wheel_forcesY,
                                                         body_x_glob_ref,
@@ -321,21 +329,60 @@ class Simulation:
         
             forceX_glob_ref = rot_x_pts(forceX,
                                         forceY,
-                                        vel_dir_glob_ref_rad)
+                                        self.yaw_angle_rad)
             
             forceY_glob_ref = rot_y_pts(forceX,
                                         forceY,
-                                        vel_dir_glob_ref_rad)
+                                        self.yaw_angle_rad)
 
-            ax.annotate(
-                text = '', #f'{np.hypot(self.forceX_fl_N, self.forceY_fl_N)}',
-                xy = (locationX + forceX_glob_ref/1000, 
-                    locationY + forceY_glob_ref/1000),
-                xytext = (locationX, locationY),
-                arrowprops = dict(facecolor = 'crimson',
-                                edgecolor = 'blue',
-                                shrink = 0)
+            force_graphics.append(
+                ax.quiver(
+                    locationX,
+                    locationY,
+                    forceX_glob_ref,
+                    forceY_glob_ref,
+                    scale=1000,
+                    scale_units='x',
+                    width=0.005,
+                    headlength=3,
+                    headaxislength=3,
+                    color='red')
+            
+                # ax.annotate(
+                #     text = f"{np.hypot(self.forceX_fl_N, self.forceY_fl_N):.2f}",
+                #     xy = (locationX, locationY),
+                #     xytext = (locationX + forceX_glob_ref/1000,
+                #         locationY + forceY_glob_ref/1000),
+                #     # xy = (locationX + forceX_glob_ref/1000,
+                #     #     locationY + forceY_glob_ref/1000),
+                #     # xytext = (locationX, locationY),
+                #     arrowprops = dict(
+                #                 arrowstyle = '<-',
+                #                 relpos = (0,0),
+                #                 shrinkA = 0,
+                #                 shrinkB = 0,
+                #                 edgecolor = 'red'
+                #                 )
+                # )
                 )
+
+            vel_cg_x = self.velocity_mps*np.cos(self.side_slip_rad)
+            vel_cg_y = self.velocity_mps*np.sin(self.side_slip_rad)
+            vel_cg_x_glob_ref = rot_x_pts(vel_cg_x, vel_cg_y, self.yaw_angle_rad)
+            vel_cg_y_glob_ref = rot_y_pts(vel_cg_x, vel_cg_y, self.yaw_angle_rad)
+            vel_cg_graphic = \
+                ax.quiver(
+                    0,
+                    0,
+                    vel_cg_x_glob_ref,
+                    vel_cg_y_glob_ref,
+                    scale=10,
+                    scale_units='x',
+                    width=0.005,
+                    headlength=3,
+                    headaxislength=3,
+                    color='black')
+                
 
         ax.set_aspect('equal')
         ax.grid(visible=True)
@@ -407,10 +454,12 @@ class Simulation:
         setattr(self, states_dict[state2_name], state2_value_SI)
 
         initial_guesses_dict = {
-            "radius": 30.0,
-            "sideslip": np.deg2rad(-5),
+            "radius": -30.0,
+            "sideslip": np.deg2rad(5),
             "velocity": 50/3.6,
-            "steering": np.deg2rad(20),
+            "steering": np.deg2rad(-20),
+            # Initial guesses need to adapt depending on a predicted left or
+            # right hand turn
         }
         
         states3and4 = [x for x in valid_state_names 
@@ -439,8 +488,8 @@ class Simulation:
 if __name__ == "__main__":
     car = Vehicle(cg_to_front_m = 2.0,
                   cg_to_back_m = 2.0,
-                  toe_front_deg = 1.0,
-                  toe_back_deg = 1.0)
+                  toe_front_deg = 0.0,
+                  toe_back_deg = 0.0)
     
     tire_front = Tire(cornering_stiffness_NperRad=20000)
     tire_rear = Tire()
@@ -449,6 +498,6 @@ if __name__ == "__main__":
                             tire_rear=tire_rear)
     
     simulation.find_stationary_point(state1_name="steer",
-                                     state1_value_SI=np.deg2rad(25),
+                                     state1_value_SI=np.deg2rad(-5),
                                      state2_name="vel",
-                                     state2_value_SI=30/3.6)
+                                     state2_value_SI=100/3.6)
