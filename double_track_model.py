@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.optimize import root
 import matplotlib.pyplot as plt
-from typing import Any
+from typing import Any, List
 
 class Vehicle:
     def __init__(
@@ -97,8 +97,8 @@ class Simulation:
         self.steer_after_rack_deg = 0
         self.steer_after_rack_rad = 0
         self.path_radius_m = 0
-        self.side_slip_rad = 0
-        self.side_slip_deg = 0
+        self.sideslip_rad = 0
+        self.sideslip_deg = 0
         self.accel_cent_mps2 = 0
 
         # Initialization of wheel/tire angles
@@ -132,10 +132,20 @@ class Simulation:
         self.force_centrifugal_N = 0
         self.yaw_moment_Nm = 0
 
+        # Initialization of simulation related parameters
+        self.valid_state_names = \
+            ["velocity", "steering", "radius", "sideslip"]
+        self.state_name_dict = {
+                    "radius": "path_radius_m",
+                    "sideslip": "sideslip_rad",
+                    "velocity": "velocity_mps",
+                    "steering": "steer_after_rack_rad"
+                }
+
     def calc_wheel_angles(self):
 
         steer = self.steer_after_rack_rad
-        beta = self.side_slip_rad
+        beta = self.sideslip_rad
         T_f = self.car.track_front_m
         R = self.path_radius_m
         ack = self.car.ackermann_factor
@@ -143,10 +153,10 @@ class Simulation:
         
         # Conversion to degrees
         self.steer_after_rack_deg = np.rad2deg(self.steer_after_rack_rad)
-        self.side_slip_deg = np.rad2deg(self.side_slip_rad)
+        self.side_slip_deg = np.rad2deg(self.sideslip_rad)
         
         # Steering angle from individual wheels
-        self.steer_fl_rad = np.atan2(steer, 1    - ack*T_f/(2*R))
+        self.steer_fl_rad = np.atan2(steer, 1 - ack*T_f/(2*R))
         self.steer_fr_rad = np.atan2(steer, 1 + ack*T_f/(2*R))
         # TO DO - sign inversion should depend on the steering sign instead
         # of curvature radius sign
@@ -211,13 +221,13 @@ class Simulation:
         to_normal = lambda x,y,ang: x*np.sin(ang) + y*np.cos(ang)
 
         self.force_norm_fl = \
-            to_normal(self.forceX_fl_N, self.forceY_fl_N, self.side_slip_rad)
+            to_normal(self.forceX_fl_N, self.forceY_fl_N, self.sideslip_rad)
         self.force_norm_fr = \
-            to_normal(self.forceX_fr_N, self.forceY_fr_N, self.side_slip_rad)
+            to_normal(self.forceX_fr_N, self.forceY_fr_N, self.sideslip_rad)
         self.force_norm_bl = \
-            to_normal(self.forceX_bl_N, self.forceY_bl_N, self.side_slip_rad)
+            to_normal(self.forceX_bl_N, self.forceY_bl_N, self.sideslip_rad)
         self.force_norm_br = \
-            to_normal(self.forceX_br_N, self.forceY_br_N, self.side_slip_rad)
+            to_normal(self.forceX_br_N, self.forceY_br_N, self.sideslip_rad)
     
     def calc_yaw_moment(self):
         self.yaw_moment_Nm = \
@@ -247,7 +257,7 @@ class Simulation:
         body_x_for_plot = np.array([+a,+a,+a,-b,-b,-b])
         body_y_for_plot = np.array([+wf/2,-wf/2,0,0,+wb/2,-wb/2])
 
-        vel_dir_glob_ref_rad = self.yaw_angle_rad + self.side_slip_rad
+        vel_dir_glob_ref_rad = self.yaw_angle_rad + self.sideslip_rad
 
         body_x_for_plot_glob_ref = \
             rot_x_pts(body_x_for_plot,
@@ -366,8 +376,8 @@ class Simulation:
                 # )
                 )
 
-            vel_cg_x = self.velocity_mps*np.cos(self.side_slip_rad)
-            vel_cg_y = self.velocity_mps*np.sin(self.side_slip_rad)
+            vel_cg_x = self.velocity_mps*np.cos(self.sideslip_rad)
+            vel_cg_y = self.velocity_mps*np.sin(self.sideslip_rad)
             vel_cg_x_glob_ref = rot_x_pts(vel_cg_x, vel_cg_y, self.yaw_angle_rad)
             vel_cg_y_glob_ref = rot_y_pts(vel_cg_x, vel_cg_y, self.yaw_angle_rad)
             vel_cg_graphic = \
@@ -390,35 +400,122 @@ class Simulation:
         print()
 
     def find_stationary_point(self,
-                              state1_name: str,
-                              state1_value_SI: float,
-                              state2_name: str,
-                              state2_value_SI: float,
-                              state3_name = None,
-                              state3_initial_guess_SI = None,
-                              state4_name = None,
-                              state4_initial_guess_SI = None):
+                              state_names: List[str],
+                              state_values_SI: List[float]):
         
-        def validate_state_input(input, valid_state_names):
-            """ Validate whether 'state' has unique partial 
-            match in the valid_state_input"""
+        def parse_state_input(input_state_names,
+                              input_state_values_SI):
+            
+            def input_validation(input, valid_state_names):
+                """ Validate whether 'state' has unique partial 
+                match in the valid_state_input"""
 
-            matches = [state for state in valid_state_names 
-                       if state.startswith(input.lower())]
+                matches = [state for state in valid_state_names 
+                        if state.startswith(input.lower())]
+                
+                if len(matches) == 0:
+                    raise ValueError(f"No match found for '{input}'. \
+                                    Options: {valid_state_names}")
+                elif len(matches) > 1:
+                    raise ValueError(f"Ambiguous match '{input}'. \
+                                    Could be {matches}")
             
-            if len(matches) == 0:
-                raise ValueError(f"No match found for '{input}'. \
-                                 Options: {valid_state_names}")
-            elif len(matches) > 1:
-                raise ValueError(f"Ambiguous match '{input}'. \
-                                 Could be {matches}")
+                return matches[0]
             
-            return matches[0]
+            validated_state_names = list()
+            for state_name, state_value in \
+                zip(input_state_names, input_state_values_SI):
+                
+                validated_state_name = \
+                    input_validation(state_name, self.valid_state_names)
+                
+                validated_state_names.append(validated_state_name)
+
+                attribute_name = self.state_name_dict[validated_state_name]
+                setattr(self, attribute_name, state_value)
+            
+            if len(validated_state_names) != 2:
+                raise ValueError(f"Exactly two states from \
+                                 '{self.valid_state_names}' should be informed")
+            
+            return validated_state_names
         
+        def calculate_initial_guesses(state_names):
+            m = self.car.mass_kg
+            lf = self.car.cg_to_front_m
+            lb = self.car.cg_to_back_m
+            cf = self.tire_front.cornering_stiffness_NperRad
+            cb = self.tire_rear.cornering_stiffness_NperRad
+
+            EG = -m*(cf*lf - cb*lb)/(cf*cb*(lf+lb))
+            SG = m*lf/(lf+lb)/cb
+
+            # {"velocity", "steering", "radius", "sideslip"}
+            if set(state_names) == set(["velocity", "steering"]):
+                v = self.velocity_mps
+                s = self.steer_after_rack_rad
+                
+                R = ((lf+lb) + EG*v**2)/s
+                slip = s*((lb + SG*v**2)/((lf+lb) + EG*v**2))
+
+                states_to_solve_for = ["radius", "sideslip"]
+                x0 = [R, slip]
+
+            elif set(state_names) == set(["velocity", "radius"]):
+                v = self.velocity_mps
+                R = self.path_radius_m
+
+                s = ((lf+lb) + EG*v**2)/R
+                slip = (lb + SG*v**2)/R
+
+                states_to_solve_for = ["sideslip", "steer"]
+                x0 = [slip, s]
+
+            elif set(state_names) == set(["velocity", "sideslip"]):
+                v = self.velocity_mps
+                slip = self.sideslip_rad
+                
+                R = (lb + SG*v**2)/slip
+                s = slip*((lf+lb) + EG*v**2)/(lb + SG*v**2)
+                
+                states_to_solve_for = ["radius", "steer"]
+                x0 = [R, s]
+
+            elif set(state_names) == set(["steering", "radius"]):
+                s = self.steer_after_rack_rad
+                R = self.path_radius_m
+
+                v = np.sqrt((R*s - (lf+lb))/EG)
+                slip = lb/R + SG/EG*(s - (lf+lb)/R)
+
+                states_to_solve_for = ["velocity", "sideslip"]
+                x0 = [v, slip]
+
+            elif set(state_names) == set(["steering", "sideslip"]):
+                s = self.steer_after_rack_rad
+                slip = self.sideslip_rad
+
+                v = np.sqrt((s*lb - slip*(lf+lb))/(slip*EG - s*SG))
+                R = ((lf+lb) + EG*v**2)/s
+
+                states_to_solve_for = ["velocity", "radius"]
+                x0 = [v, R]
+
+            elif set(state_names) == set(["sideslip", "radius"]):
+                slip = self.sideslip_rad
+                R = self.path_radius_m
+
+                s = (lf+lb)/R + EG/SG*(slip - lb/R)
+                v = np.sqrt((R*slip - lb)/SG)
+
+                states_to_solve_for = ["velocity", "steer"]
+                x0 = [v, s]
+
+            return states_to_solve_for, x0
+
         def objective_function(x):
-
-            setattr(self, states_dict[state3_name], x[0])
-            setattr(self, states_dict[state4_name], x[1])
+            for state, value in zip(states_to_solve_for, x):
+                setattr(self, self.state_name_dict[state], value)
 
             self.calc_wheel_angles()
             self.calc_tire_forces()
@@ -436,51 +533,10 @@ class Simulation:
             self.calc_yaw_moment()
             
             return [centrip_minus_centrif, self.yaw_moment_Nm]
-        
-        valid_state_names = \
-            ["velocity", "steering", "radius", "sideslip"]
 
-        state1_name = validate_state_input(state1_name, valid_state_names)
-        state2_name = validate_state_input(state2_name, valid_state_names)
+        validated_state_names = parse_state_input(state_names, state_values_SI)
 
-        states_dict = {
-                    "radius": "path_radius_m",
-                    "sideslip": "side_slip_rad",
-                    "velocity": "velocity_mps",
-                    "steering": "steer_after_rack_rad",
-                }
-
-        setattr(self, states_dict[state1_name], state1_value_SI)
-        setattr(self, states_dict[state2_name], state2_value_SI)
-
-        initial_guesses_dict = {
-            "radius": -30.0,
-            "sideslip": np.deg2rad(5),
-            "velocity": 50/3.6,
-            "steering": np.deg2rad(-20),
-            # Initial guesses need to adapt depending on a predicted left or
-            # right hand turn
-        }
-        
-        states3and4 = [x for x in valid_state_names 
-                       if x not in [state1_name, state2_name]]
-
-        if state3_name == None:           
-            state3_name = states3and4[0]
-            state3_initial_guess_SI = initial_guesses_dict[state3_name]
-        else:
-            state3_name = validate_state_input(state3_name, 
-                                               valid_state_names=states3and4)
-            
-        if state4_name == None:
-            state4_name = states3and4[1]
-            state4_initial_guess_SI = initial_guesses_dict[state4_name]
-        else:
-            state4_name = validate_state_input(state4_name,
-                                               valid_state_names=states3and4)
-
-
-        x0 = [state3_initial_guess_SI, state4_initial_guess_SI]
+        states_to_solve_for, x0 = calculate_initial_guesses(validated_state_names)
         
         sol = root(objective_function, x0 = x0)
         self.visualize_vehicle_state()
@@ -497,7 +553,5 @@ if __name__ == "__main__":
                             tire_front=tire_front,
                             tire_rear=tire_rear)
     
-    simulation.find_stationary_point(state1_name="steer",
-                                     state1_value_SI=np.deg2rad(-5),
-                                     state2_name="vel",
-                                     state2_value_SI=100/3.6)
+    simulation.find_stationary_point(state_names=["radius", "sideslip"],
+                                     state_values_SI=[-52.5, -0.06])
