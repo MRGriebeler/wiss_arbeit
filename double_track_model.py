@@ -97,8 +97,8 @@ class Simulation:
         self.steer_after_rack_deg = 0
         self.steer_after_rack_rad = 0
         self.path_radius_m = 0
-        self.sideslip_rad = 0
-        self.sideslip_deg = 0
+        self.side_slip_rad = 0
+        self.side_slip_deg = 0
         self.accel_cent_mps2 = 0
 
         # Initialization of wheel/tire angles
@@ -127,17 +127,27 @@ class Simulation:
         self.forceX_br_N = 0
         self.forceY_br_N = 0
 
+        # Initialization of tire moments
+        self.moment_yaw_tire_fl_Nm = 0
+        self.moment_yaw_tire_fr_Nm = 0
+        self.moment_yaw_tire_bl_Nm = 0
+        self.moment_yaw_tire_br_Nm = 0
+
+        # Initialization of axle moments
+        self.moment_yaw_axle_f_Nm = 0
+        self.moment_yaw_axle_b_Nm = 0
+        
         # Initialization of resultant forces/moments
         self.force_centripetal_N = 0
         self.force_centrifugal_N = 0
-        self.yaw_moment_Nm = 0
+        self.moment_yaw_Nm = 0
 
         # Initialization of simulation related parameters
         self.valid_state_names = \
             ["velocity", "steering", "radius", "sideslip"]
         self.state_name_dict = {
                     "radius": "path_radius_m",
-                    "sideslip": "sideslip_rad",
+                    "sideslip": "side_slip_rad",
                     "velocity": "velocity_mps",
                     "steering": "steer_after_rack_rad"
                 }
@@ -145,101 +155,115 @@ class Simulation:
     def calc_wheel_angles(self):
 
         steer = self.steer_after_rack_rad
-        beta = self.sideslip_rad
-        T_f = self.car.track_front_m
+        toe_b = self.car.toe_back_rad
+        toe_f = self.car.toe_front_rad
+        beta = self.side_slip_rad
+        wf = self.car.track_front_m
+        wb = self.car.track_back_m
+        lf = self.car.cg_to_front_m
+        lb = self.car.cg_to_back_m
         R = self.path_radius_m
         ack = self.car.ackermann_factor
         self.accel_cent_mps2 = self.velocity_mps**2/R
         
         # Conversion to degrees
         self.steer_after_rack_deg = np.rad2deg(self.steer_after_rack_rad)
-        self.side_slip_deg = np.rad2deg(self.sideslip_rad)
+        self.side_slip_deg = np.rad2deg(self.side_slip_rad)
         
         # Steering angle from individual wheels
-        self.steer_fl_rad = np.atan2(steer, 1 - ack*T_f/(2*R))
-        self.steer_fr_rad = np.atan2(steer, 1 + ack*T_f/(2*R))
-        # TO DO - sign inversion should depend on the steering sign instead
-        # of curvature radius sign
+        self.steer_fl_rad = \
+            np.atan2(np.tan(steer), 1 - ack*wf/2*np.tan(steer)/(lf+lb))
+        self.steer_fr_rad = \
+            np.atan2(np.tan(steer), 1 + ack*wf/2*np.tan(steer)/(lf+lb))
 
         # Conversion to degrees
         self.steer_fl_deg = np.rad2deg(self.steer_fl_rad)
         self.steer_fr_deg = np.rad2deg(self.steer_fr_rad)
-        
-        b = self.car.cg_to_back_m
-        toe_b = self.car.toe_back_rad
-
-        # Influence of track width on kinematic parameters
-        factor_left = np.cos(beta) - T_f/(2*R)
-        factor_right = np.cos(beta) + T_f/(2*R)
 
         # Tire slip angles (Rear)
         self.alpha_bl_rad = \
-            np.atan2(np.sin(beta) - b/R, factor_left) + toe_b*np.sign(R)
+            np.atan2(np.sin(beta) - lb/R, np.cos(beta) - wb/2/R) \
+                + toe_b*np.sign(R)
+        
         self.alpha_br_rad = \
-            np.atan2(np.sin(beta) - b/R, factor_right) - toe_b*np.sign(R)
+            np.atan2(np.sin(beta) - lb/R, np.cos(beta) + wb/2/R) \
+                - toe_b*np.sign(R)
         
         # Conversion to degrees
         self.alpha_bl_deg = np.rad2deg(self.alpha_bl_rad)
         self.alpha_br_deg = np.rad2deg(self.alpha_br_rad)
 
-        a = self.car.cg_to_front_m
-        toe_f = self.car.toe_front_rad
-
         # Tire slip angles (Front)
-        self.alpha_fl_rad = np.atan2(np.sin(beta) + a/R, factor_left) \
-            - self.steer_fl_rad + toe_f*np.sign(R)
-        self.alpha_fr_rad = np.atan2(np.sin(beta) + a/R, factor_right) \
-            - self.steer_fr_rad - toe_f*np.sign(R)
+        self.alpha_fl_rad = \
+            np.atan2(np.sin(beta) + lf/R, np.cos(beta) - wf/2/R) \
+                    - self.steer_fl_rad + toe_f*np.sign(R)
+        
+        self.alpha_fr_rad = \
+            np.atan2(np.sin(beta) + lf/R, np.cos(beta) + wf/2/R) \
+                    - self.steer_fr_rad - toe_f*np.sign(R)
         
         # Conversion to degrees
         self.alpha_fl_deg = np.rad2deg(self.alpha_fl_rad)
         self.alpha_fr_deg = np.rad2deg(self.alpha_fr_rad)
 
-    def calc_tire_forces(self):
+    def calc_forces(self):
 
-        Cr = self.tire_rear.cornering_stiffness_NperRad
+        Cb = self.tire_rear.cornering_stiffness_NperRad
         toe_b = self.car.toe_back_rad
-        R = self.path_radius_m
+        a_bl = self.alpha_bl_rad
+        a_br = self.alpha_br_rad
         
-        self.forceY_bl_N = -Cr*(self.alpha_bl_rad)*np.sin(np.pi/2 - toe_b)
-        self.forceX_bl_N = -Cr*(self.alpha_bl_rad)*np.cos(np.pi/2 - toe_b)
+        self.forceX_bl_N = +Cb*(a_bl)*np.sin(-toe_b)
+        self.forceY_bl_N = -Cb*(a_bl)*np.cos(-toe_b)
         
-        self.forceY_br_N = -Cr*(self.alpha_br_rad)*np.sin(np.pi/2 + toe_b)
-        self.forceX_br_N = -Cr*(self.alpha_br_rad)*np.cos(np.pi/2 + toe_b)
+        self.forceX_br_N = +Cb*(a_br)*np.sin(+toe_b)
+        self.forceY_br_N = -Cb*(a_br)*np.cos(+toe_b)
 
         Cf = self.tire_front.cornering_stiffness_NperRad
         toe_f = self.car.toe_front_rad
         d_fl = self.steer_fl_rad
         d_fr = self.steer_fr_rad
-        
-        self.forceY_fl_N = -Cf*(self.alpha_fl_rad*np.sin(np.pi/2 + d_fl - toe_f))
-        self.forceX_fl_N = -Cf*(self.alpha_fl_rad*np.cos(np.pi/2 + d_fl - toe_f))
-        
-        self.forceY_fr_N = -Cf*(self.alpha_fr_rad*np.sin(np.pi/2 + d_fr + toe_f))
-        self.forceX_fr_N = -Cf*(self.alpha_fr_rad*np.cos(np.pi/2 + d_fr + toe_f))
+        a_fl = self.alpha_fl_rad
+        a_fr = self.alpha_fr_rad
 
-        to_normal = lambda x,y,ang: x*np.sin(ang) + y*np.cos(ang)
+        self.forceX_fl_N = +Cf*(a_fl*np.sin(d_fl - toe_f))
+        self.forceY_fl_N = -Cf*(a_fl*np.cos(d_fl - toe_f))
+        
+        self.forceX_fr_N = +Cf*(a_fr*np.sin(d_fr + toe_f))
+        self.forceY_fr_N = -Cf*(a_fr*np.cos(d_fr + toe_f))
 
-        self.force_norm_fl = \
-            to_normal(self.forceX_fl_N, self.forceY_fl_N, self.sideslip_rad)
-        self.force_norm_fr = \
-            to_normal(self.forceX_fr_N, self.forceY_fr_N, self.sideslip_rad)
-        self.force_norm_bl = \
-            to_normal(self.forceX_bl_N, self.forceY_bl_N, self.sideslip_rad)
-        self.force_norm_br = \
-            to_normal(self.forceX_br_N, self.forceY_br_N, self.sideslip_rad)
+        beta = self.side_slip_rad
+        self.force_norm_fl = Cf*a_fl*np.cos(beta - d_fl)
+        self.force_norm_fr = Cf*a_fr*np.cos(beta - d_fr)
+        self.force_norm_bl = Cb*a_bl*np.cos(beta)
+        self.force_norm_br = Cb*a_br*np.cos(beta)
     
-    def calc_yaw_moment(self):
-        self.yaw_moment_Nm = \
+    def calc_moments(self):
+        self.moment_yaw_tire_fl_Nm = \
             + self.car.cg_to_front_m*self.forceY_fl_N \
-            - self.car.track_front_m/2*self.forceX_fl_N \
+            - self.car.track_front_m/2*self.forceX_fl_N
+        
+        self.moment_yaw_tire_fr_Nm = \
             + self.car.cg_to_front_m*self.forceY_fr_N \
-            + self.car.track_front_m/2*self.forceX_fr_N \
+            + self.car.track_front_m/2*self.forceX_fr_N
+        
+        self.moment_yaw_tire_bl_Nm = \
             - self.car.cg_to_back_m*self.forceY_bl_N \
-            - self.car.track_back_m/2*self.forceX_bl_N \
+            - self.car.track_back_m/2*self.forceX_bl_N
+        
+        self.moment_yaw_tire_br_Nm = \
             - self.car.cg_to_back_m*self.forceY_br_N \
             + self.car.track_back_m/2*self.forceX_br_N
 
+        self.moment_yaw_axle_f_Nm = \
+            self.moment_yaw_tire_fl_Nm + self.moment_yaw_tire_fr_Nm
+        
+        self.moment_yaw_axle_b_Nm = \
+            self.moment_yaw_tire_bl_Nm + self.moment_yaw_tire_br_Nm
+        
+        self.moment_yaw_Nm = \
+            self.moment_yaw_axle_f_Nm + self.moment_yaw_axle_b_Nm
+            
     def visualize_vehicle_state(self):
         
         rot_x_pts = lambda x,y,ang: x*np.cos(ang) - y*np.sin(ang)
@@ -257,7 +281,7 @@ class Simulation:
         body_x_for_plot = np.array([+a,+a,+a,-b,-b,-b])
         body_y_for_plot = np.array([+wf/2,-wf/2,0,0,+wb/2,-wb/2])
 
-        vel_dir_glob_ref_rad = self.yaw_angle_rad + self.sideslip_rad
+        vel_dir_glob_ref_rad = self.yaw_angle_rad + self.side_slip_rad
 
         body_x_for_plot_glob_ref = \
             rot_x_pts(body_x_for_plot,
@@ -376,8 +400,8 @@ class Simulation:
                 # )
                 )
 
-            vel_cg_x = self.velocity_mps*np.cos(self.sideslip_rad)
-            vel_cg_y = self.velocity_mps*np.sin(self.sideslip_rad)
+            vel_cg_x = self.velocity_mps*np.cos(self.side_slip_rad)
+            vel_cg_y = self.velocity_mps*np.sin(self.side_slip_rad)
             vel_cg_x_glob_ref = rot_x_pts(vel_cg_x, vel_cg_y, self.yaw_angle_rad)
             vel_cg_y_glob_ref = rot_y_pts(vel_cg_x, vel_cg_y, self.yaw_angle_rad)
             vel_cg_graphic = \
@@ -440,15 +464,17 @@ class Simulation:
             
             return validated_state_names
         
-        def calculate_initial_guesses(state_names):
+        def calc_init_guess(state_names):
             m = self.car.mass_kg
             lf = self.car.cg_to_front_m
             lb = self.car.cg_to_back_m
-            cf = self.tire_front.cornering_stiffness_NperRad
-            cb = self.tire_rear.cornering_stiffness_NperRad
+            mf = m*lb/(lf+lb)
+            mb = m*lf/(lf+lb)
+            cf_twin = 2*self.tire_front.cornering_stiffness_NperRad
+            cb_twin = 2*self.tire_rear.cornering_stiffness_NperRad
 
-            EG = -m*(cf*lf - cb*lb)/(cf*cb*(lf+lb))
-            SG = m*lf/(lf+lb)/cb
+            EG = mf/cf_twin - mb/cb_twin
+            SG = -mb/cb_twin
 
             # {"velocity", "steering", "radius", "sideslip"}
             if set(state_names) == set(["velocity", "steering"]):
@@ -473,7 +499,7 @@ class Simulation:
 
             elif set(state_names) == set(["velocity", "sideslip"]):
                 v = self.velocity_mps
-                slip = self.sideslip_rad
+                slip = self.side_slip_rad
                 
                 R = (lb + SG*v**2)/slip
                 s = slip*((lf+lb) + EG*v**2)/(lb + SG*v**2)
@@ -493,7 +519,7 @@ class Simulation:
 
             elif set(state_names) == set(["steering", "sideslip"]):
                 s = self.steer_after_rack_rad
-                slip = self.sideslip_rad
+                slip = self.side_slip_rad
 
                 v = np.sqrt((s*lb - slip*(lf+lb))/(slip*EG - s*SG))
                 R = ((lf+lb) + EG*v**2)/s
@@ -502,13 +528,13 @@ class Simulation:
                 x0 = [v, R]
 
             elif set(state_names) == set(["sideslip", "radius"]):
-                slip = self.sideslip_rad
+                slip = self.side_slip_rad
                 R = self.path_radius_m
 
                 s = (lf+lb)/R + EG/SG*(slip - lb/R)
                 v = np.sqrt((R*slip - lb)/SG)
 
-                states_to_solve_for = ["velocity", "steer"]
+                states_to_solve_for = ["velocity", "steering"]
                 x0 = [v, s]
 
             return states_to_solve_for, x0
@@ -518,7 +544,7 @@ class Simulation:
                 setattr(self, self.state_name_dict[state], value)
 
             self.calc_wheel_angles()
-            self.calc_tire_forces()
+            self.calc_forces()
 
             self.force_centripetal_N = \
                 self.force_norm_fl + self.force_norm_fr + \
@@ -527,16 +553,16 @@ class Simulation:
             self.force_centrifugal_N = \
                 self.car.mass_kg*self.velocity_mps**2/self.path_radius_m
             
-            centrip_minus_centrif = \
-                self.force_centripetal_N - self.force_centrifugal_N
+            force_resultant = \
+                self.force_centripetal_N + self.force_centrifugal_N
             
-            self.calc_yaw_moment()
+            self.calc_moments()
             
-            return [centrip_minus_centrif, self.yaw_moment_Nm]
+            return [force_resultant, self.moment_yaw_Nm]
 
         validated_state_names = parse_state_input(state_names, state_values_SI)
 
-        states_to_solve_for, x0 = calculate_initial_guesses(validated_state_names)
+        states_to_solve_for, x0 = calc_init_guess(validated_state_names)
         
         sol = root(objective_function, x0 = x0)
         self.visualize_vehicle_state()
@@ -545,7 +571,9 @@ if __name__ == "__main__":
     car = Vehicle(cg_to_front_m = 2.0,
                   cg_to_back_m = 2.0,
                   toe_front_deg = 0.0,
-                  toe_back_deg = 0.0)
+                  toe_back_deg = 0.0,
+                  track_front_m=1.8,
+                  track_back_m=2)
     
     tire_front = Tire(cornering_stiffness_NperRad=20000)
     tire_rear = Tire()
@@ -553,5 +581,5 @@ if __name__ == "__main__":
                             tire_front=tire_front,
                             tire_rear=tire_rear)
     
-    simulation.find_stationary_point(state_names=["radius", "sideslip"],
-                                     state_values_SI=[-52.5, -0.06])
+    simulation.find_stationary_point(state_names=["vel", "steer"],
+                                     state_values_SI=[10/3.6, 35/57.3])
