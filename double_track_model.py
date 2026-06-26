@@ -101,6 +101,12 @@ class Simulation:
         self.side_slip_deg = 0
         self.accel_cent_mps2 = 0
 
+        # Initialization of single-track model state variables
+        self.velocity_STM_mps = 0
+        self.steer_after_rack_STM_rad = 0
+        self.path_radius_STM_m = 0
+        self.side_slip_STM_rad = 0
+
         # Initialization of wheel/tire angles
         self.steer_fl_rad = 0
         self.steer_fr_rad = 0
@@ -265,123 +271,102 @@ class Simulation:
             self.moment_yaw_axle_f_Nm + self.moment_yaw_axle_b_Nm
             
     def visualize_vehicle_state(self):
-        
-        rot_x_pts = lambda x,y,ang: x*np.cos(ang) - y*np.sin(ang)
-        rot_y_pts = lambda x,y,ang: x*np.sin(ang) + y*np.cos(ang)
 
-        local_variables = locals()
-        if 'fig' not in local_variables and 'ax' not in local_variables:
-            fig, ax = plt.subplots()
+        def display_vehicle_body():
+            body_lines_x = np.array([+lf,+lf,+lf,-lb,-lb,-lb])
+            body_lines_y = np.array([+wf/2,-wf/2,0,0,+wb/2,-wb/2])
 
-        a = self.car.cg_to_front_m
-        b = self.car.cg_to_back_m
-        wf = self.car.track_front_m
-        wb = self.car.track_back_m
-
-        body_x_for_plot = np.array([+a,+a,+a,-b,-b,-b])
-        body_y_for_plot = np.array([+wf/2,-wf/2,0,0,+wb/2,-wb/2])
-
-        vel_dir_glob_ref_rad = self.yaw_angle_rad + self.side_slip_rad
-
-        body_x_for_plot_glob_ref = \
-            rot_x_pts(body_x_for_plot,
-                      body_y_for_plot,
-                      self.yaw_angle_rad)
-        
-        body_y_for_plot_glob_ref = \
-            rot_y_pts(body_x_for_plot,
-                      body_y_for_plot,
-                      self.yaw_angle_rad)
-
-        inputs = (body_x_for_plot_glob_ref, body_y_for_plot_glob_ref)
-        
-        body_lines_glob_ref = ax.plot(*inputs)
-
-        body_pts_x_m = np.array([+a,+a,-b,-b])
-        body_pts_y_m = np.array([+wf/2,-wf/2,-wb/2,+wb/2])
-
-        body_x_glob_ref = \
-            rot_x_pts(body_pts_x_m,
-                      body_pts_y_m,
-                      self.yaw_angle_rad)
-        
-        body_y_glob_ref = \
-            rot_y_pts(body_pts_x_m,
-                      body_pts_y_m,
-                      self.yaw_angle_rad)
-        
-        wheel_pts_x_m = np.array([+0.5, +0.5, -0.5, -0.5])
-        wheel_pts_y_m = np.array([+0.2, -0.2, -0.2, +0.2])
-        
-        R = self.path_radius_m
-        
-        wheel_angle_rad = [
-            self.steer_fl_rad - np.sign(R)*self.car.toe_front_rad,
-            self.steer_fr_rad + np.sign(R)*self.car.toe_front_rad,
-            +np.sign(self.steer_fr_rad)*self.car.toe_back_rad,
-            -np.sign(self.steer_fl_rad)*self.car.toe_back_rad]
-
-        wheel_lines = list()
-        for x_shift, y_shift, ang in zip(body_pts_x_m,
-                                         body_pts_y_m,
-                                         wheel_angle_rad):
+            body_lines_x_glob_ref = \
+                rot_x_pts(body_lines_x,
+                        body_lines_y,
+                        self.yaw_angle_rad)
             
-            wheel_x_car_ref = x_shift + \
-                rot_x_pts(wheel_pts_x_m, wheel_pts_y_m, ang)
-            wheel_y_car_ref = y_shift + \
-                rot_y_pts(wheel_pts_x_m, wheel_pts_y_m, ang)
-            
-            wheel_x_glob_ref = \
-                rot_x_pts(wheel_x_car_ref,
-                          wheel_y_car_ref,
-                          self.yaw_angle_rad)
-            wheel_y_glob_ref = \
-                rot_y_pts(wheel_x_car_ref,
-                          wheel_y_car_ref,
-                          self.yaw_angle_rad)
+            body_lines_y_glob_ref = \
+                rot_y_pts(body_lines_x,
+                        body_lines_y,
+                        self.yaw_angle_rad)
 
-            inputs = (np.append(wheel_x_glob_ref, wheel_x_glob_ref[0]),
-                      np.append(wheel_y_glob_ref, wheel_y_glob_ref[0]))
+            inputs = (body_lines_x_glob_ref, body_lines_y_glob_ref)
             
-            wheel_lines.append(ax.plot(*inputs, color='black'))
-
-        wheel_forcesX = [self.forceX_fl_N,
-                         self.forceX_fr_N,
-                         self.forceX_br_N,
-                         self.forceX_bl_N]
+            return ax.plot(*inputs)
         
-        wheel_forcesY = [self.forceY_fl_N,
-                         self.forceY_fr_N,
-                         self.forceY_br_N,
-                         self.forceY_bl_N]
+        def display_wheels():
+            wheel_lines_x_m = np.array([+0.5, +0.5, -0.5, -0.5])
+            wheel_lines_y_m = np.array([+0.2, -0.2, -0.2, +0.2])
 
-        force_graphics = list()
-        for forceX, forceY, locationX, locationY in zip(wheel_forcesX,
+            wheel_angle_rad = [
+                self.steer_fl_rad - np.sign(steer)*self.car.toe_front_rad,
+                self.steer_fr_rad + np.sign(steer)*self.car.toe_front_rad,
+                +np.sign(steer)*self.car.toe_back_rad,
+                -np.sign(steer)*self.car.toe_back_rad]
+            
+            wheel_lines_glob_ref = list()
+            for x_shift, y_shift, ang in zip(wheel_locations_x_m,
+                                            wheel_locations_y_m,
+                                            wheel_angle_rad):
+                
+                wheel_x_car_ref = x_shift + \
+                    rot_x_pts(wheel_lines_x_m, wheel_lines_y_m, ang)
+                wheel_y_car_ref = y_shift + \
+                    rot_y_pts(wheel_lines_x_m, wheel_lines_y_m, ang)
+                
+                wheel_x_glob_ref = \
+                    rot_x_pts(wheel_x_car_ref,
+                            wheel_y_car_ref,
+                            self.yaw_angle_rad)
+                wheel_y_glob_ref = \
+                    rot_y_pts(wheel_x_car_ref,
+                            wheel_y_car_ref,
+                            self.yaw_angle_rad)
+
+                inputs = (np.append(wheel_x_glob_ref, wheel_x_glob_ref[0]),
+                        np.append(wheel_y_glob_ref, wheel_y_glob_ref[0]))
+                
+                wheel_lines_glob_ref.append(ax.plot(*inputs, color='black'))
+                
+            return wheel_lines_glob_ref
+        
+        def display_forces():
+            wheel_forcesX = [self.forceX_fl_N,
+                            self.forceX_fr_N,
+                            self.forceX_br_N,
+                            self.forceX_bl_N]
+        
+            wheel_forcesY = [self.forceY_fl_N,
+                            self.forceY_fr_N,
+                            self.forceY_br_N,
+                            self.forceY_bl_N]
+            
+            force_graphics = list()
+            for forceX, forceY, locationX, locationY in zip(wheel_forcesX,
                                                         wheel_forcesY,
-                                                        body_x_glob_ref,
-                                                        body_y_glob_ref):
+                                                        wheel_loc_x_glob_ref,
+                                                        wheel_loc_y_glob_ref):
         
-            forceX_glob_ref = rot_x_pts(forceX,
-                                        forceY,
-                                        self.yaw_angle_rad)
-            
-            forceY_glob_ref = rot_y_pts(forceX,
-                                        forceY,
-                                        self.yaw_angle_rad)
+                forceX_glob_ref = rot_x_pts(forceX,
+                                            forceY,
+                                            self.yaw_angle_rad)
+                
+                forceY_glob_ref = rot_y_pts(forceX,
+                                            forceY,
+                                            self.yaw_angle_rad)
 
-            force_graphics.append(
-                ax.quiver(
-                    locationX,
-                    locationY,
-                    forceX_glob_ref,
-                    forceY_glob_ref,
-                    scale=1000,
-                    scale_units='x',
-                    width=0.005,
-                    headlength=3,
-                    headaxislength=3,
-                    color='red')
-            
+                force_graphics.append(
+                    ax.quiver(
+                        locationX,
+                        locationY,
+                        forceX_glob_ref,
+                        forceY_glob_ref,
+                        scale=1000,
+                        scale_units='x',
+                        width=0.001,
+                        headlength=3,
+                        headaxislength=3,
+                        color='red'
+                        
+                    )
+                )
+
                 # ax.annotate(
                 #     text = f"{np.hypot(self.forceX_fl_N, self.forceY_fl_N):.2f}",
                 #     xy = (locationX, locationY),
@@ -398,8 +383,10 @@ class Simulation:
                 #                 edgecolor = 'red'
                 #                 )
                 # )
-                )
 
+            return force_graphics
+        
+        def display_velocities():
             vel_cg_x = self.velocity_mps*np.cos(self.side_slip_rad)
             vel_cg_y = self.velocity_mps*np.sin(self.side_slip_rad)
             vel_cg_x_glob_ref = rot_x_pts(vel_cg_x, vel_cg_y, self.yaw_angle_rad)
@@ -412,14 +399,121 @@ class Simulation:
                     vel_cg_y_glob_ref,
                     scale=10,
                     scale_units='x',
-                    width=0.005,
+                    width=0.001,
                     headlength=3,
                     headaxislength=3,
                     color='black')
+
+            vel_wheel_graphics = list()
+            yaw_rate = self.velocity_mps/self.path_radius_m
+            for wheel_x, wheel_y in zip(wheel_locations_x_m, wheel_locations_y_m):
+                vel_wheel_x = vel_cg_x - yaw_rate*wheel_y
+                vel_wheel_y = vel_cg_y + yaw_rate*wheel_x
                 
+                vel_wheel_x_glob_ref = \
+                    rot_x_pts(vel_wheel_x, vel_wheel_y, self.yaw_angle_rad)
+                vel_wheel_y_glob_ref = \
+                    rot_y_pts(vel_wheel_x, vel_wheel_y, self.yaw_angle_rad)
+                
+                wheel_x_glob_ref = \
+                    rot_x_pts(wheel_x, wheel_y, self.yaw_angle_rad)
+                wheel_y_glob_ref = \
+                    rot_y_pts(wheel_x, wheel_y, self.yaw_angle_rad)
+                
+                vel_wheel_graphics.append(
+                    ax.quiver(
+                        wheel_x_glob_ref,
+                        wheel_y_glob_ref,
+                        vel_wheel_x_glob_ref,
+                        vel_wheel_y_glob_ref,
+                        scale=10,
+                        scale_units='x',
+                        width=0.001,
+                        headlength=3,
+                        headaxislength=3,
+                        color='black'
+                    )
+                )
+
+            return vel_cg_graphic, vel_wheel_graphics
+        
+        def display_path_radii():
+            vel_cg_x = self.velocity_mps*np.cos(self.side_slip_rad)
+            vel_cg_y = self.velocity_mps*np.sin(self.side_slip_rad)
+            
+            unit_normal_to_vel_cg_x = -vel_cg_y/self.velocity_mps
+            unit_normal_to_vel_cg_y = +vel_cg_x/self.velocity_mps
+            
+            path_radius_cg_x = self.path_radius_m*unit_normal_to_vel_cg_x
+            path_radius_cg_y = self.path_radius_m*unit_normal_to_vel_cg_y
+
+            path_radius_cg_glob_ref_x = \
+                rot_x_pts(path_radius_cg_x, path_radius_cg_y, self.yaw_angle_rad)
+            path_radius_cg_glob_ref_y = \
+                rot_y_pts(path_radius_cg_x, path_radius_cg_y, self.yaw_angle_rad)
+
+            path_radius_cg_graphic = \
+                ax.plot(
+                    [0, path_radius_cg_glob_ref_x],
+                    [0, path_radius_cg_glob_ref_y],
+                    color='grey',
+                    marker='x',
+                    linestyle='dashed',
+                    linewidth=1)
+            
+            path_radius_wheel_graphics = list()
+            for wheel_x, wheel_y in zip(wheel_locations_x_m, wheel_locations_y_m):
+                
+                wheel_glob_ref_x = \
+                    rot_x_pts(wheel_x, wheel_y, self.yaw_angle_rad)
+                wheel_glob_ref_y = \
+                    rot_y_pts(wheel_x, wheel_y, self.yaw_angle_rad)
+                
+                path_radius_wheel_graphics.append(
+                    ax.plot(
+                    [wheel_glob_ref_x, path_radius_cg_glob_ref_x],
+                    [wheel_glob_ref_y, path_radius_cg_glob_ref_y],
+                    color='grey',
+                    linestyle='dashed',
+                    linewidth=1)
+                )
+
+            return path_radius_cg_graphic, path_radius_wheel_graphics
+        
+        rot_x_pts = lambda x,y,ang: x*np.cos(ang) - y*np.sin(ang)
+        rot_y_pts = lambda x,y,ang: x*np.sin(ang) + y*np.cos(ang)
+
+        local_variables = locals()
+        if 'fig' not in local_variables and 'ax' not in local_variables:
+            fig, ax = plt.subplots()
+
+        lf = self.car.cg_to_front_m
+        lb = self.car.cg_to_back_m
+        wf = self.car.track_front_m
+        wb = self.car.track_back_m
+        R = self.path_radius_m
+        steer = self.steer_after_rack_rad
+
+        body_lines_glob_ref = display_vehicle_body()
+        
+        wheel_locations_x_m = np.array([+lf,+lf,-lb,-lb])
+        wheel_locations_y_m = np.array([+wf/2,-wf/2,-wb/2,+wb/2])
+
+        wheel_loc_x_glob_ref = rot_x_pts(wheel_locations_x_m,
+                                        wheel_locations_y_m,
+                                        self.yaw_angle_rad)
+        
+        wheel_loc_y_glob_ref = rot_y_pts(wheel_locations_x_m,
+                                        wheel_locations_y_m,
+                                        self.yaw_angle_rad)
+        
+        wheel_lines_glob_ref = display_wheels()
+        force_graphics = display_forces()
+        vel_cg_graphic, vel_wheel_graphics = display_velocities()
+        path_radius_cg_graphic, path_radius_wheel_graphics = display_path_radii()
 
         ax.set_aspect('equal')
-        ax.grid(visible=True)
+        ax.grid(visible=False)
         fig.show()
         print()
 
@@ -431,9 +525,6 @@ class Simulation:
                               input_state_values_SI):
             
             def input_validation(input, valid_state_names):
-                """ Validate whether 'state' has unique partial 
-                match in the valid_state_input"""
-
                 matches = [state for state in valid_state_names 
                         if state.startswith(input.lower())]
                 
@@ -487,6 +578,11 @@ class Simulation:
                 states_to_solve_for = ["radius", "sideslip"]
                 x0 = [R, slip]
 
+                self.velocity_STM_mps = v
+                self.steer_after_rack_STM_rad = s
+                self.path_radius_STM_m = R
+                self.side_slip_STM_rad = slip
+
             elif set(state_names) == set(["velocity", "radius"]):
                 v = self.velocity_mps
                 R = self.path_radius_m
@@ -496,6 +592,11 @@ class Simulation:
 
                 states_to_solve_for = ["sideslip", "steer"]
                 x0 = [slip, s]
+
+                self.velocity_STM_mps = v
+                self.path_radius_STM_m = R
+                self.steer_after_rack_STM_rad = s
+                self.side_slip_STM_rad = slip
 
             elif set(state_names) == set(["velocity", "sideslip"]):
                 v = self.velocity_mps
@@ -507,6 +608,11 @@ class Simulation:
                 states_to_solve_for = ["radius", "steer"]
                 x0 = [R, s]
 
+                self.velocity_STM_mps = v
+                self.side_slip_STM_rad = slip
+                self.path_radius_STM_m = R
+                self.steer_after_rack_STM_rad = s
+
             elif set(state_names) == set(["steering", "radius"]):
                 s = self.steer_after_rack_rad
                 R = self.path_radius_m
@@ -516,6 +622,11 @@ class Simulation:
 
                 states_to_solve_for = ["velocity", "sideslip"]
                 x0 = [v, slip]
+
+                self.steer_after_rack_STM_rad = s
+                self.path_radius_STM_m = R
+                self.velocity_STM_mps = v
+                self.side_slip_STM_rad = slip
 
             elif set(state_names) == set(["steering", "sideslip"]):
                 s = self.steer_after_rack_rad
@@ -527,6 +638,11 @@ class Simulation:
                 states_to_solve_for = ["velocity", "radius"]
                 x0 = [v, R]
 
+                self.steer_after_rack_STM_rad = s
+                self.side_slip_STM_rad = slip
+                self.velocity_STM_mps = v
+                self.path_radius_STM_m = R
+
             elif set(state_names) == set(["sideslip", "radius"]):
                 slip = self.side_slip_rad
                 R = self.path_radius_m
@@ -536,6 +652,11 @@ class Simulation:
 
                 states_to_solve_for = ["velocity", "steering"]
                 x0 = [v, s]
+
+                self.side_slip_STM_rad = slip
+                self.path_radius_STM_m = R
+                self.steer_after_rack_STM_rad = s
+                self.velocity_STM_mps = v
 
             return states_to_solve_for, x0
 
@@ -582,4 +703,4 @@ if __name__ == "__main__":
                             tire_rear=tire_rear)
     
     simulation.find_stationary_point(state_names=["vel", "steer"],
-                                     state_values_SI=[10/3.6, 35/57.3])
+                                     state_values_SI=[30/3.6, -25/57.3])
