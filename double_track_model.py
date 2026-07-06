@@ -1,706 +1,865 @@
 import numpy as np
+
 from scipy.optimize import root
+from scipy.integrate import solve_ivp
+
 import matplotlib.pyplot as plt
-from typing import Any, List
+from matplotlib.figure import Figure
+from matplotlib.axes import Axes
 
+from typing import Callable
+from dataclasses import dataclass
+import functools
+
+@dataclass
 class Vehicle:
-    def __init__(
-        self,
-        track_back_m: float = 1.5,
-        track_front_m: float = 1.5,
-        cg_to_front_m: float = 2.0,
-        cg_to_back_m: float = 2.0,
-        mass_kg: float = 1000,
-        yaw_inertia_multiplier: float = 1.0,
-        steer_ratio: float = 1.0,
-        toe_front_deg: float = 0.0,
-        toe_back_deg:  float = 0.0,
-        ackermann_factor: float = 1.0
-        ):
+    track_back_m: float = 1.5
+    track_front_m: float = 1.5
+    cg_to_front_m: float = 2.0
+    cg_to_back_m: float = 2.0
+    mass_kg: float = 1000
+    yaw_inertia_multiplier: float = 1.0
+    yaw_inertia_kgm2: float = np.nan
+    steer_ratio_before_over_after_rack: float = 1.0
+    toe_out_front_deg: float = 0.0
+    toe_out_back_deg:  float = 0.0
+    ackermann_factor: float = 1.0
 
-        self.track_back_m = track_back_m
-        self.track_front_m = track_front_m
-        self.cg_to_front_m = cg_to_front_m
-        self.cg_to_back_m = cg_to_back_m
-        self.wheelbase_m = cg_to_front_m + cg_to_back_m
-        self.mass_kg = mass_kg
-        self.yaw_inertia_multiplier = yaw_inertia_multiplier
-        
-        self.yaw_inertia_kgm2 = self.calculate_inertia(
-            track_front_m,
-            track_back_m,
-            self.wheelbase_m,
-            mass_kg,
-            yaw_inertia_multiplier)
-        
-        self.steer_ratio = steer_ratio
-        self.toe_front_deg = toe_front_deg
-        self.toe_front_rad = np.deg2rad(toe_front_deg)
-        self.toe_back_deg = toe_back_deg
-        self.toe_back_rad = np.deg2rad(toe_back_deg)
-        self.ackermann_factor = ackermann_factor
-
-    def calculate_inertia(
-        self,
-        track_front_m: float,
-        track_back_m: float,
-        wheelbase_m: float,
-        mass_kg: float,
-        yaw_inertia_multiplier: float
-        ) -> np.floating[Any]:
+    def wheelbase_m(self) -> float:
+        return self.cg_to_front_m + self.cg_to_back_m
+    
+    def yaw_inertia_estimation_kgm2(self) -> float:
         '''
         Yaw inertia is calculated based on the moment of inertia of a rectangle
         with the previously informed dimensions
         '''
-        track_mean_m = np.mean([track_front_m, track_back_m])
-        yaw_inertia_kgm2 = 1/12*mass_kg*(track_mean_m**2 + wheelbase_m**2)
-        yaw_inertia_kgm2 = yaw_inertia_multiplier*yaw_inertia_kgm2
+        track_mean_m = (self.track_front_m + self.track_back_m)/2
+        rectangle_inertia_kgm2 = \
+            1/12*self.mass_kg*(track_mean_m**2 + self.wheelbase_m**2)
 
-        return yaw_inertia_kgm2
+        return rectangle_inertia_kgm2*self.yaw_inertia_multiplier
 
+@dataclass
 class Tire:
-    def __init__(
-        self,
-        cornering_stiffness_NperRad: int = 30000,
-        relaxation_length_m: int = 5
-        ):
-        self.cornering_stiffness_NperRad = cornering_stiffness_NperRad
-        self.relaxation_length_m = relaxation_length_m
+    cornering_stiffness_NperRad: float = 30000.0
+    relaxation_length_m: float = 5.0
 
-class Simulation:
-    '''
-    Subscript reference:
-    _br = _back_right
-    _bl = _back_left
-    _fr = _front_right
-    _fl = _front_left
-    '''
-    def __init__(
-        self,
+@dataclass
+class WheelAngles:
+    steer_fl: float
+    steer_fr: float
+    alpha_fl: float
+    alpha_fr: float
+    alpha_bl: float
+    alpha_br: float
+
+def calc_wheel_angles(
         car: Vehicle,
-        tire_front: Tire,
-        tire_rear: Tire
-    ):
-        self.car = car
-        self.tire_front = tire_front
-        self.tire_rear = tire_rear
-        
-        # Initialization of vehicle state variables
-        self.position_x_m = 0
-        self.position_y_m = 0
-        self.yaw_angle_deg = 90
-        self.yaw_angle_rad = np.deg2rad(self.yaw_angle_deg)
-        self.velocity_kph = 0
-        self.velocity_mps = 0
-        self.steer_before_rack_deg = 0
-        self.steer_before_rack_rad = 0
-        self.steer_after_rack_deg = 0
-        self.steer_after_rack_rad = 0
-        self.path_radius_m = 0
-        self.side_slip_rad = 0
-        self.side_slip_deg = 0
-        self.accel_cent_mps2 = 0
+        *,
+        steering_wheel_input_rad: float,
+        side_slip_rad: float,
+        dyaw_dt_rad_s: float,
+        velocity_m_s: float
+        ) -> WheelAngles:
+    '''
+    Calculate the following quantities:
+    - Steering angle from the front left wheel [rad]
+    - Steering angle from the front right wheel [rad]
+    - Tire slip angle from the front left wheel [rad]
+    - Tire slip angle from the front right wheel [rad]
+    - Tire slip angle from the back left wheel [rad]
+    - Tire slip angle from the back right wheel [rad]
 
-        # Initialization of single-track model state variables
-        self.velocity_STM_mps = 0
-        self.steer_after_rack_STM_rad = 0
-        self.path_radius_STM_m = 0
-        self.side_slip_STM_rad = 0
-
-        # Initialization of wheel/tire angles
-        self.steer_fl_rad = 0
-        self.steer_fr_rad = 0
-        self.alpha_bl_rad = 0
-        self.alpha_br_rad = 0
-        self.alpha_fl_rad = 0
-        self.alpha_fr_rad = 0
-
-        # Initialization of convertion to degrees
-        self.steer_fl_deg = 0
-        self.steer_fr_deg = 0
-        self.alpha_bl_deg = 0
-        self.alpha_br_deg = 0
-        self.alpha_fl_deg = 0
-        self.alpha_fr_deg = 0
-
-        # Initialization of tire forces
-        self.forceX_fl_N = 0
-        self.forceY_fl_N = 0
-        self.forceX_fr_N = 0
-        self.forceY_fr_N = 0
-        self.forceX_bl_N = 0
-        self.forceY_bl_N = 0
-        self.forceX_br_N = 0
-        self.forceY_br_N = 0
-
-        # Initialization of tire moments
-        self.moment_yaw_tire_fl_Nm = 0
-        self.moment_yaw_tire_fr_Nm = 0
-        self.moment_yaw_tire_bl_Nm = 0
-        self.moment_yaw_tire_br_Nm = 0
-
-        # Initialization of axle moments
-        self.moment_yaw_axle_f_Nm = 0
-        self.moment_yaw_axle_b_Nm = 0
-        
-        # Initialization of resultant forces/moments
-        self.force_centripetal_N = 0
-        self.force_centrifugal_N = 0
-        self.moment_yaw_Nm = 0
-
-        # Initialization of simulation related parameters
-        self.valid_state_names = \
-            ["velocity", "steering", "radius", "sideslip"]
-        self.state_name_dict = {
-                    "radius": "path_radius_m",
-                    "sideslip": "side_slip_rad",
-                    "velocity": "velocity_mps",
-                    "steering": "steer_after_rack_rad"
-                }
-
-    def calc_wheel_angles(self):
-
-        steer = self.steer_after_rack_rad
-        toe_b = self.car.toe_back_rad
-        toe_f = self.car.toe_front_rad
-        beta = self.side_slip_rad
-        wf = self.car.track_front_m
-        wb = self.car.track_back_m
-        lf = self.car.cg_to_front_m
-        lb = self.car.cg_to_back_m
-        R = self.path_radius_m
-        ack = self.car.ackermann_factor
-        self.accel_cent_mps2 = self.velocity_mps**2/R
-        
-        # Conversion to degrees
-        self.steer_after_rack_deg = np.rad2deg(self.steer_after_rack_rad)
-        self.side_slip_deg = np.rad2deg(self.side_slip_rad)
-        
-        # Steering angle from individual wheels
-        self.steer_fl_rad = \
-            np.atan2(np.tan(steer), 1 - ack*wf/2*np.tan(steer)/(lf+lb))
-        self.steer_fr_rad = \
-            np.atan2(np.tan(steer), 1 + ack*wf/2*np.tan(steer)/(lf+lb))
-
-        # Conversion to degrees
-        self.steer_fl_deg = np.rad2deg(self.steer_fl_rad)
-        self.steer_fr_deg = np.rad2deg(self.steer_fr_rad)
-
-        # Tire slip angles (Rear)
-        self.alpha_bl_rad = \
-            np.atan2(np.sin(beta) - lb/R, np.cos(beta) - wb/2/R) \
-                + toe_b*np.sign(R)
-        
-        self.alpha_br_rad = \
-            np.atan2(np.sin(beta) - lb/R, np.cos(beta) + wb/2/R) \
-                - toe_b*np.sign(R)
-        
-        # Conversion to degrees
-        self.alpha_bl_deg = np.rad2deg(self.alpha_bl_rad)
-        self.alpha_br_deg = np.rad2deg(self.alpha_br_rad)
-
-        # Tire slip angles (Front)
-        self.alpha_fl_rad = \
-            np.atan2(np.sin(beta) + lf/R, np.cos(beta) - wf/2/R) \
-                    - self.steer_fl_rad + toe_f*np.sign(R)
-        
-        self.alpha_fr_rad = \
-            np.atan2(np.sin(beta) + lf/R, np.cos(beta) + wf/2/R) \
-                    - self.steer_fr_rad - toe_f*np.sign(R)
-        
-        # Conversion to degrees
-        self.alpha_fl_deg = np.rad2deg(self.alpha_fl_rad)
-        self.alpha_fr_deg = np.rad2deg(self.alpha_fr_rad)
-
-    def calc_forces(self):
-
-        Cb = self.tire_rear.cornering_stiffness_NperRad
-        toe_b = self.car.toe_back_rad
-        a_bl = self.alpha_bl_rad
-        a_br = self.alpha_br_rad
-        
-        self.forceX_bl_N = +Cb*(a_bl)*np.sin(-toe_b)
-        self.forceY_bl_N = -Cb*(a_bl)*np.cos(-toe_b)
-        
-        self.forceX_br_N = +Cb*(a_br)*np.sin(+toe_b)
-        self.forceY_br_N = -Cb*(a_br)*np.cos(+toe_b)
-
-        Cf = self.tire_front.cornering_stiffness_NperRad
-        toe_f = self.car.toe_front_rad
-        d_fl = self.steer_fl_rad
-        d_fr = self.steer_fr_rad
-        a_fl = self.alpha_fl_rad
-        a_fr = self.alpha_fr_rad
-
-        self.forceX_fl_N = +Cf*(a_fl*np.sin(d_fl - toe_f))
-        self.forceY_fl_N = -Cf*(a_fl*np.cos(d_fl - toe_f))
-        
-        self.forceX_fr_N = +Cf*(a_fr*np.sin(d_fr + toe_f))
-        self.forceY_fr_N = -Cf*(a_fr*np.cos(d_fr + toe_f))
-
-        beta = self.side_slip_rad
-        self.force_norm_fl = Cf*a_fl*np.cos(beta - d_fl)
-        self.force_norm_fr = Cf*a_fr*np.cos(beta - d_fr)
-        self.force_norm_bl = Cb*a_bl*np.cos(beta)
-        self.force_norm_br = Cb*a_br*np.cos(beta)
+    The output is provided as a Wheel_Angles object
+    '''
+    #region - Calculate steering angle from each individual wheel    
     
-    def calc_moments(self):
-        self.moment_yaw_tire_fl_Nm = \
-            + self.car.cg_to_front_m*self.forceY_fl_N \
-            - self.car.track_front_m/2*self.forceX_fl_N
-        
-        self.moment_yaw_tire_fr_Nm = \
-            + self.car.cg_to_front_m*self.forceY_fr_N \
-            + self.car.track_front_m/2*self.forceX_fr_N
-        
-        self.moment_yaw_tire_bl_Nm = \
-            - self.car.cg_to_back_m*self.forceY_bl_N \
-            - self.car.track_back_m/2*self.forceX_bl_N
-        
-        self.moment_yaw_tire_br_Nm = \
-            - self.car.cg_to_back_m*self.forceY_br_N \
-            + self.car.track_back_m/2*self.forceX_br_N
+    # Shorthand for the necessary input
+    steer = \
+        steering_wheel_input_rad/car.steer_ratio_before_over_after_rack
+    ack = car.ackermann_factor
+    wf = car.track_front_m
+    lf = car.cg_to_front_m
+    lb = car.cg_to_back_m
+    toe_f = np.deg2rad(car.toe_out_front_deg)
 
-        self.moment_yaw_axle_f_Nm = \
-            self.moment_yaw_tire_fl_Nm + self.moment_yaw_tire_fr_Nm
+    # Calculation
+    steer_fl_rad = \
+        np.atan2(np.tan(steer), 1 - ack*wf/2*np.tan(steer)/(lf+lb)) \
+            + toe_f*np.sign(steer)
+
+    steer_fr_rad = \
+        np.atan2(np.tan(steer), 1 + ack*wf/2*np.tan(steer)/(lf+lb)) \
+            - toe_f*np.sign(steer)
+    
+    #endregion
+
+    #region - Calculate tire slip angles at the front axle
+    
+    # Shorthand for the additional necessary input
+    beta = side_slip_rad
+    vel = velocity_m_s
+    dyaw_dt = dyaw_dt_rad_s
+    
+    # Calculation
+    alpha_fl_rad = \
+        np.atan2(np.sin(beta) + dyaw_dt*lf/vel, np.cos(beta) - 
+            (dyaw_dt/vel)*wf/2) - steer_fl_rad + toe_f*np.sign(steer)
         
-        self.moment_yaw_axle_b_Nm = \
-            self.moment_yaw_tire_bl_Nm + self.moment_yaw_tire_br_Nm
+    alpha_fr_rad = \
+        np.atan2(np.sin(beta) + dyaw_dt*lf/vel, np.cos(beta) + 
+            (dyaw_dt/vel)*wf/2) - steer_fr_rad - toe_f*np.sign(steer)
+
+    #endregion
+    
+    #region - Calculate tire slip angles at the rear axle
+
+    # Shorthand for the additional necessary input
+    wb = car.track_back_m
+    toe_b = np.deg2rad(car.toe_out_back_deg)
+
+    # Calculation
+    alpha_bl_rad = \
+        np.atan2(np.sin(beta) - dyaw_dt*lb/vel, np.cos(beta) - 
+            (dyaw_dt/vel)*wb/2) + toe_b*np.sign(steer)
         
-        self.moment_yaw_Nm = \
-            self.moment_yaw_axle_f_Nm + self.moment_yaw_axle_b_Nm
+    alpha_br_rad = \
+        np.atan2(np.sin(beta) - dyaw_dt*lb/vel, np.cos(beta) + 
+            (dyaw_dt/vel)*wb/2) - toe_b*np.sign(steer)
+    
+    #endregion
+
+    #region - Define output and return statement
+    output_rad = WheelAngles(steer_fl_rad,
+                              steer_fr_rad,
+                              alpha_fl_rad,
+                              alpha_fr_rad,
+                              alpha_bl_rad,
+                              alpha_br_rad)
+    
+    return output_rad
+
+    #endregion
+
+@dataclass
+class WheelForces:
+    Fx_fl: float
+    Fy_fl: float
+    Fx_fr: float
+    Fy_fr: float
+    Fx_bl: float
+    Fy_bl: float
+    Fx_br: float
+    Fy_br: float
+    Fn_fl: float
+    Fn_fr: float
+    Fn_bl: float
+    Fn_br: float
+
+def calc_wheel_forces(
+        car: Vehicle,
+        *,
+        tire_front: Tire,
+        tire_rear: Tire,
+        wheel_angles: WheelAngles,
+        side_slip_rad: float
+        ) -> WheelForces:
+    ''' 
+    Calculates X and Y compoenents of the force on each tire with respect to
+    the vehicle reference frame. Also calculates the force component in the
+    normal direction to the CG velocity vector
+    '''
+    #region - Calculate front axle wheel forces on vehicle reference frame
+
+    # Shorthand for the necessary input
+    c_f = tire_front.cornering_stiffness_NperRad
+    toe_f = car.toe_out_front_deg
+    d_fl = wheel_angles.steer_fl
+    d_fr = wheel_angles.steer_fr
+    a_fl = wheel_angles.alpha_fl
+    a_fr = wheel_angles.alpha_fr
+
+    # Calculation
+    Fx_fl_N = +c_f*(a_fl*np.sin(d_fl + toe_f))
+    Fy_fl_N = -c_f*(a_fl*np.cos(d_fl + toe_f))
+
+    Fx_fr_N = +c_f*(a_fr*np.sin(d_fl - toe_f))
+    Fy_fr_N = -c_f*(a_fr*np.cos(d_fl - toe_f))
+
+    #endregion
+
+    #region - Calculate back axle wheel forces on vehicle reference frame
+
+    # Shorthand for the additional necessary input
+    c_b = tire_rear.cornering_stiffness_NperRad
+    toe_b = car.toe_out_back_deg
+    a_bl = wheel_angles.alpha_bl
+    a_br = wheel_angles.alpha_br
+
+    # Calculation
+    Fx_bl_N = +c_b*a_bl*np.sin(+toe_b)
+    Fy_bl_N = -c_b*a_bl*np.cos(+toe_b)
+
+    Fx_br_N = +c_b*a_br*np.sin(-toe_b)
+    Fy_br_N = -c_b*a_br*np.cos(-toe_b)
+
+    #endregion
+    
+    #region - Calculate the wheel force component normal to the CG 
+
+    Fn_fl_N = c_f*a_fl*np.cos(side_slip_rad - d_fl)
+    Fn_fr_N = c_f*a_fr*np.cos(side_slip_rad - d_fr)
+    Fn_bl_N = c_b*a_bl*np.cos(side_slip_rad)
+    Fn_br_N = c_b*a_br*np.cos(side_slip_rad)
+
+    #endregion
+
+    #region - Define output and return statement
+    output_N = WheelForces(Fx_fl_N, Fy_fl_N,
+                            Fx_fr_N, Fy_fr_N,
+                            Fx_bl_N, Fy_bl_N,
+                            Fx_br_N, Fy_br_N,
+                            Fn_fl_N,
+                            Fn_fr_N,
+                            Fn_bl_N,
+                            Fn_br_N)
+    
+    return output_N
+
+    #endregion
+
+@dataclass
+class WheelMoments:
+    Myaw_fl: float
+    Myaw_fr: float
+    Myaw_bl: float
+    Myaw_br: float
+
+def calc_wheel_moments(
+        car: Vehicle,
+        wheel_forces: WheelForces
+        ):
+    '''
+    Calculates the yaw moment generated by each individual wheel
+    '''
+    #region - Calculate yaw moment generated by each individual wheel
+
+    # Shorthand for the necessary input
+    l_f = car.cg_to_front_m
+    l_b = car.cg_to_back_m
+    w_f = car.track_front_m
+    w_b = car.track_back_m
+
+    # Calculation
+    Myaw_fl_Nm = + l_f*wheel_forces.Fy_fl - w_f/2*wheel_forces.Fx_fl
+    Myaw_fr_Nm = + l_f*wheel_forces.Fy_fr + w_f/2*wheel_forces.Fx_fr
+    Myaw_bl_Nm = - l_b*wheel_forces.Fy_bl - w_b/2*wheel_forces.Fx_bl
+    Myaw_br_Nm = - l_b*wheel_forces.Fy_br + w_b/2*wheel_forces.Fx_br
+
+    #endregion
+    
+    #region - Define output and return statement
+
+    output_Nm = WheelMoments(Myaw_fl_Nm,
+                              Myaw_fr_Nm,
+                              Myaw_bl_Nm,
+                              Myaw_br_Nm)
+    
+    return output_Nm
+
+    #endregion
+
+VALID_SSC_INPUT_NAMES = {"radius_of_turn_m",
+                         "side_slip_rad",
+                         "steering_wheel_input_rad",
+                         "velocity_m_s"}
+
+def validate_ssc_input(function):
+    '''
+    Custom decorator that validates the input given to the
+    steady_state_cornering() function. Could also be implemented directly in
+    steady_state_cornering(), but has been separated into a decorator to allow
+    steady_state_cornering() to have only the physical calculation
+    '''
+    @functools.wraps(function)
+    def wrapper(*args, **kwargs):
+        input = kwargs.pop("input", None)
+
+        if input is None:
+            raise ValueError("The 'input' keyword argument is mandatory")
+
+        if not isinstance(input, dict):
+            raise TypeError("Input must be a dictionary")
+        if len(input) != 2:
+            raise ValueError("Dictionary must contain exactly two itens")
+        
+        validated_input = dict()
+
+        for key, value in input.items():
+            matches = [valid_name for valid_name in VALID_SSC_INPUT_NAMES \
+                       if valid_name.startswith(key.lower())]
             
-    def visualize_vehicle_state(self):
+            if not matches:
+                raise ValueError(f"'{key}' does not match any of the valid \
+                                input ({VALID_SSC_INPUT_NAMES})")
+            if len(matches) > 1:
+                raise ValueError(f"'{key}' is ambiguous. \
+                                 Matches found: {matches}")
 
-        def display_vehicle_body():
-            body_lines_x = np.array([+lf,+lf,+lf,-lb,-lb,-lb])
-            body_lines_y = np.array([+wf/2,-wf/2,0,0,+wb/2,-wb/2])
+            if matches[0] in validated_input:
+                raise ValueError(f"Duplicated input '{matches[0]}' detected")
+            
+            validated_input[matches[0]] = value
 
-            body_lines_x_glob_ref = \
+            kwargs["input"] = validated_input
+
+        return function(*args, **kwargs)
+    return wrapper
+
+@dataclass
+class MotionState:
+    radius_of_turn: float
+    side_slip: float
+    steering_wheel_input: float
+    velocity: float
+    dyaw_dt: float
+    d2yaw_dt2: float
+    dside_slip_dt: float
+
+@dataclass
+class ResultSet:
+    car: Vehicle
+    tire_front: Tire
+    tire_rear: Tire
+    motion_state: MotionState
+
+@validate_ssc_input
+def ssc_single_track(
+        car: Vehicle,
+        *,
+        tire_front: Tire,
+        tire_rear: Tire,
+        input: dict
+        ) -> ResultSet:
+    '''
+    Outputs velocity, turning radius, side slip angle and steering angle
+    for a given vehicle and tires using the equations for a linear single
+    track model. Two of the four parameters need to be passed as input.
+    The remaining two parameters are calculated.
+    '''
+    # Shorthand for the necessary parameters
+    m = car.mass_kg
+    lf = car.cg_to_front_m
+    lb = car.cg_to_back_m
+    mf = m*lb/(lf+lb)
+    mb = m*lf/(lf+lb)
+    cf_twin = 2*tire_front.cornering_stiffness_NperRad
+    cb_twin = 2*tire_rear.cornering_stiffness_NperRad
+    steer_ratio = car.steer_ratio_before_over_after_rack
+
+    # Definition of Eigenlenkgradient and Schwimmwinkelgradient
+    EG = + mf/cf_twin - mb/cb_twin
+    SG = - mb/cb_twin
+
+    # Calculation of vehicle parameters depending on input
+    sorted_keys = tuple(sorted(input.keys()))
+    match sorted_keys:
+        case ("radius_of_turn_m", "side_slip_rad"):
+            R = input["radius_of_turn_m"]
+            slip = input["side_slip_rad"]
+            s = (lf+lb)/R + EG/SG*(slip - lb/R)
+            v = np.sqrt((R*slip - lb)/SG)
+
+        case ("radius_of_turn_m", "steering_wheel_input_rad"):
+            R = input["radius_of_turn_m"]
+            s = input["steering_wheel_input_rad"]/steer_ratio
+            v = np.sqrt((R*s - (lf+lb))/EG)
+            slip = lb/R + SG/EG*(s - (lf+lb)/R)
+
+        case ("radius_of_turn_m", "velocity_m_s"):
+            R = input["radius_of_turn_m"]
+            v = input["velocity_m_s"]
+            s = ((lf+lb) + EG*v**2)/R
+            slip = (lb + SG*v**2)/R
+
+        case ("side_slip_rad", "steering_wheel_input_rad"):
+            slip = input["side_slip_rad"]
+            s = input["steering_wheel_input_rad"]/steer_ratio
+            v = np.sqrt((s*lb - slip*(lf+lb))/(slip*EG - s*SG))
+            R = ((lf+lb) + EG*v**2)/s
+
+        case ("side_slip_rad", "velocity_m_s"):
+            slip = input["side_slip_rad"]
+            v = input["velocity_m_s"]
+            R = (lb + SG*v**2)/slip
+            s = slip*((lf+lb) + EG*v**2)/(lb + SG*v**2)
+
+        case ("steering_wheel_input_rad", "velocity_m_s"):
+            s = input["steering_wheel_input_rad"]/steer_ratio
+            v = input["velocity_m_s"]
+            R = ((lf+lb) + EG*v**2)/s
+            slip = s*((lb + SG*v**2)/((lf+lb) + EG*v**2))
+
+    # Definition of output and return statement
+    motion_state = MotionState(R, slip, s*steer_ratio, v, v/R, 0, 0)
+    result_set = ResultSet(car, tire_front, tire_rear, motion_state)
+    
+    return result_set
+
+@validate_ssc_input
+def steady_state_cornering(
+        car: Vehicle,
+        *,
+        tire_front: Tire,
+        tire_rear: Tire,
+        input: dict
+        ):
+    '''
+    Outputs velocity, turning radius, side slip angle and steering angle
+    for a given vehicle and tires using the equations for a non-linear
+    (no small angles assumption) double track model.
+    Two of the four parameters need to be passed as input.
+    The remaining two parameters are calculated.
+    '''
+    single_track_result = ssc_single_track(car,
+                                     tire_front=tire_front,
+                                     tire_rear=tire_rear,
+                                     input=input)
+    
+    def motion_equations(car: Vehicle,
+                         *,
+                         tire_front: Tire,
+                         tire_rear: Tire,
+                         steering_wheel_input_rad: float,
+                         side_slip_rad: float,
+                         velocity_m_s: float,
+                         radius_of_turn_m: float):
+        
+        wheel_angles_rad = calc_wheel_angles(
+            car,
+            steering_wheel_input_rad=steering_wheel_input_rad,
+            side_slip_rad=side_slip_rad,
+            dyaw_dt_rad_s=velocity_m_s/radius_of_turn_m,
+            velocity_m_s=velocity_m_s)
+        
+        wheel_forces_N = calc_wheel_forces(
+            car,
+            tire_front=tire_front,
+            tire_rear=tire_rear,
+            wheel_angles=wheel_angles_rad,
+            side_slip_rad=side_slip_rad)
+        
+        force_centripetal_N = wheel_forces_N.Fn_fl + wheel_forces_N.Fn_fr \
+            + wheel_forces_N.Fn_bl + wheel_forces_N.Fn_br
+        
+        force_centrifugal_N = car.mass_kg*velocity_m_s**2/radius_of_turn_m
+
+        force_resultant_N = force_centripetal_N + force_centrifugal_N
+        
+        wheel_moments_Nm = calc_wheel_moments(car, wheel_forces=wheel_forces_N)
+        
+        yaw_moment_Nm = wheel_moments_Nm.Myaw_fl + wheel_moments_Nm.Myaw_fr \
+            + wheel_moments_Nm.Myaw_bl + wheel_moments_Nm.Myaw_br
+        
+        return (force_resultant_N, yaw_moment_Nm)
+    
+    #region - Definition of parameters to solve for based on user input
+
+    sorted_keys = tuple(sorted(input.keys()))
+    match sorted_keys:
+        case ("radius_of_turn_m", "side_slip_rad"):
+            objective_function = \
+                lambda x: motion_equations(
+                    car = car,
+                    tire_front=tire_front,
+                    tire_rear=tire_rear,
+                    radius_of_turn_m=input["radius_of_turn_m"],
+                    side_slip_rad=input["side_slip_rad"],
+                    steering_wheel_input_rad=x[0],
+                    velocity_m_s=x[1])
+            
+            x0 = (single_track_result.steering_wheel_input,
+                  single_track_result.velocity)
+
+        case ("radius_of_turn_m", "steering_wheel_input_rad"):
+            objective_function = \
+                lambda x: motion_equations(
+                    car = car,
+                    tire_front=tire_front,
+                    tire_rear=tire_rear,
+                    radius_of_turn_m=input["radius_of_turn_m"],
+                    steering_wheel_input_rad=input["steering_wheel_input_rad"],
+                    side_slip_rad=x[0],
+                    velocity_m_s=x[1])
+
+            x0 = (single_track_result.side_slip,
+                  single_track_result.velocity)
+
+        case ("radius_of_turn_m", "velocity_m_s"):
+            objective_function = \
+                lambda x: motion_equations(
+                    car = car,
+                    tire_front=tire_front,
+                    tire_rear=tire_rear,
+                    radius_of_turn_m=input["radius_of_turn_m"],
+                    velocity_m_s=input["velocity_m_s"],
+                    steering_wheel_input_rad=x[0],
+                    side_slip_rad=x[1])
+
+            x0 = (single_track_result.motion_state.steering_wheel_input,
+                  single_track_result.motion_state.side_slip)
+
+        case ("side_slip_rad", "steering_wheel_input_rad"):
+            objective_function = \
+                lambda x: motion_equations(
+                    car = car,
+                    tire_front=tire_front,
+                    tire_rear=tire_rear,
+                    side_slip_rad=input["side_slip_rad"],
+                    steering_wheel_input_rad=input["steering_wheel_input_rad"],
+                    radius_of_turn_m=x[0],
+                    velocity_m_s=x[1])
+
+            x0 = (single_track_result.motion_state.radius_of_turn,
+                  single_track_result.motion_state.velocity)
+
+        case ("side_slip_rad", "velocity_m_s"):
+            objective_function = \
+                lambda x: motion_equations(
+                    car = car,
+                    tire_front=tire_front,
+                    tire_rear=tire_rear,
+                    side_slip_rad=input["side_slip_rad"],
+                    velocity_m_s=input["velocity_m_s"],
+                    steering_wheel_input_rad=x[0],
+                    radius_of_turn_m=x[1])
+
+            x0 = (single_track_result.motion_state.steering_wheel_input,
+                  single_track_result.motion_state.radius_of_turn)
+
+        case ("steering_wheel_input_rad", "velocity_m_s"):
+            objective_function = \
+                lambda x: motion_equations(
+                    car = car,
+                    tire_front=tire_front,
+                    tire_rear=tire_rear,
+                    steering_wheel_input_rad=input["steering_wheel_input_rad"],
+                    velocity_m_s=input["velocity_m_s"],
+                    side_slip_rad=x[0],
+                    radius_of_turn_m=x[1])
+
+            x0 = (single_track_result.motion_state.side_slip,
+                  single_track_result.motion_state.radius_of_turn)
+            
+    #endregion
+
+    solution = root(objective_function, x0=x0)
+    
+    #region - Definition of motion_state based on user informed input
+
+    match sorted_keys:
+        case ("radius_of_turn_m", "side_slip_rad"):
+            motion_state = MotionState(
+                input["radius_of_turn_m"],
+                input["side_slip_rad"],
+                solution.x[0],
+                solution.x[1],
+                np.nan,
+                np.nan,
+                np.nan)
+
+        case ("radius_of_turn_m", "steering_wheel_input_rad"):
+            motion_state = MotionState(
+                input["radius_of_turn_m"],
+                solution.x[0],
+                input["steering_wheel_input_rad"],
+                solution.x[1],
+                np.nan,
+                np.nan,
+                np.nan)
+
+        case ("radius_of_turn_m", "velocity_m_s"):
+            motion_state = MotionState(
+                input["radius_of_turn_m"],
+                solution.x[0],
+                solution.x[1],
+                input["radius_of_turn_m"],
+                np.nan,
+                np.nan,
+                np.nan)
+            
+        case ("side_slip_rad", "steering_wheel_input_rad"):
+            motion_state = MotionState(
+                solution.x[0],
+                input["side_slip_rad"],
+                input["steering_wheel_input_rad"],
+                solution.x[1],
+                np.nan,
+                np.nan,
+                np.nan)
+
+        case ("side_slip_rad", "velocity_m_s"):
+            motion_state = MotionState(
+                solution.x[0],
+                input["side_slip_rad"],
+                solution.x[1],
+                input["velocity_m_s"],
+                np.nan,
+                np.nan,
+                np.nan)
+
+        case ("steering_wheel_input_rad", "velocity_m_s"):
+            motion_state = MotionState(
+                solution.x[0],
+                input["side_slip_rad"],
+                solution.x[1],
+                input["velocity_m_s"],
+                np.nan,
+                np.nan,
+                np.nan)
+
+    #endregion
+
+    #region - Definition of result_set to be returned
+    
+    # Motion state parameters given steady state condition
+    motion_state.dyaw_dt = motion_state.velocity/motion_state.radius_of_turn
+    motion_state.d2yaw_dt2 = 0
+    motion_state.dside_slip_dt = 0
+
+    result_set = ResultSet(car, tire_front, tire_rear, motion_state)
+
+    #endregion
+
+    return result_set, solution
+
+def visualize_vehicle(
+        ax: Axes,
+        result_set: ResultSet
+        ):
+
+    #region - Parameters used in multiple following sections
+
+    rot_x_pts = lambda x,y,ang: x*np.cos(ang) - y*np.sin(ang)
+    rot_y_pts = lambda x,y,ang: x*np.sin(ang) + y*np.cos(ang)
+    
+    lf = car.cg_to_front_m
+    lb = car.cg_to_back_m
+    wf = car.track_front_m
+    wb = car.track_back_m
+
+    wheel_locations_x_m = np.array([+lf,+lf,-lb,-lb])
+    wheel_locations_y_m = np.array([+wf/2,-wf/2,-wb/2,+wb/2])
+    
+    #endregion
+
+    #region - Vehicle body visualization
+
+    body_lines_x = np.array([+lf,+lf,+lf,-lb,-lb,-lb])
+    body_lines_y = np.array([+wf/2,-wf/2,0,0,+wb/2,-wb/2])
+
+    rot_global = np.pi/2
+
+    body_lines_x_glob_ref = \
                 rot_x_pts(body_lines_x,
-                        body_lines_y,
-                        self.yaw_angle_rad)
-            
-            body_lines_y_glob_ref = \
+                          body_lines_y,
+                          rot_global)
+    
+    body_lines_y_glob_ref = \
                 rot_y_pts(body_lines_x,
-                        body_lines_y,
-                        self.yaw_angle_rad)
+                          body_lines_y,
+                          rot_global)
+    
+    inputs = (body_lines_x_glob_ref, body_lines_y_glob_ref)
+    ax.plot(*inputs)
+    
+    #endregion
 
-            inputs = (body_lines_x_glob_ref, body_lines_y_glob_ref)
-            
-            return ax.plot(*inputs)
+    #region - Vehicle wheels visualization
+    
+    wheel_lines_x_m = np.array([+0.5, +0.5, -0.5, -0.5])
+    wheel_lines_y_m = np.array([+0.2, -0.2, -0.2, +0.2])
+
+    motion_state = result_set.motion_state
+
+    wheel_angles = calc_wheel_angles(
+        result_set.car,
+        steering_wheel_input_rad=motion_state.steering_wheel_input,
+        side_slip_rad=motion_state.side_slip,
+        dyaw_dt_rad_s=motion_state.dyaw_dt,
+        velocity_m_s=motion_state.velocity)
+
+    # Shorthand for necessary parameters
+    st_fl = wheel_angles.steer_fl
+    st_fr = wheel_angles.steer_fr
+    toe_f = np.deg2rad(car.toe_out_front_deg)
+    toe_b = np.deg2rad(car.toe_out_back_deg)
+
+    wheel_angle_rad = [
+        st_fl - np.sign(st_fl)*toe_f,
+        st_fr + np.sign(st_fr)*toe_f,
+        +np.sign(st_fl)*toe_b,
+        -np.sign(st_fr)*toe_b]
+    
+    wheel_lines_glob_ref = list()
+    for x_shift, y_shift, wheel_ang in zip(wheel_locations_x_m,
+                                           wheel_locations_y_m,
+                                           wheel_angle_rad):
         
-        def display_wheels():
-            wheel_lines_x_m = np.array([+0.5, +0.5, -0.5, -0.5])
-            wheel_lines_y_m = np.array([+0.2, -0.2, -0.2, +0.2])
-
-            wheel_angle_rad = [
-                self.steer_fl_rad - np.sign(steer)*self.car.toe_front_rad,
-                self.steer_fr_rad + np.sign(steer)*self.car.toe_front_rad,
-                +np.sign(steer)*self.car.toe_back_rad,
-                -np.sign(steer)*self.car.toe_back_rad]
-            
-            wheel_lines_glob_ref = list()
-            for x_shift, y_shift, ang in zip(wheel_locations_x_m,
-                                            wheel_locations_y_m,
-                                            wheel_angle_rad):
-                
-                wheel_x_car_ref = x_shift + \
-                    rot_x_pts(wheel_lines_x_m, wheel_lines_y_m, ang)
-                wheel_y_car_ref = y_shift + \
-                    rot_y_pts(wheel_lines_x_m, wheel_lines_y_m, ang)
-                
-                wheel_x_glob_ref = \
-                    rot_x_pts(wheel_x_car_ref,
-                            wheel_y_car_ref,
-                            self.yaw_angle_rad)
-                wheel_y_glob_ref = \
-                    rot_y_pts(wheel_x_car_ref,
-                            wheel_y_car_ref,
-                            self.yaw_angle_rad)
-
-                inputs = (np.append(wheel_x_glob_ref, wheel_x_glob_ref[0]),
-                        np.append(wheel_y_glob_ref, wheel_y_glob_ref[0]))
-                
-                wheel_lines_glob_ref.append(ax.plot(*inputs, color='black'))
-                
-            return wheel_lines_glob_ref
+        wheel_x_car_ref = x_shift + \
+            rot_x_pts(wheel_lines_x_m, wheel_lines_y_m, wheel_ang)
         
-        def display_forces():
-            wheel_forcesX = [self.forceX_fl_N,
-                            self.forceX_fr_N,
-                            self.forceX_br_N,
-                            self.forceX_bl_N]
+        wheel_y_car_ref = y_shift + \
+            rot_y_pts(wheel_lines_x_m, wheel_lines_y_m, wheel_ang)
         
-            wheel_forcesY = [self.forceY_fl_N,
-                            self.forceY_fr_N,
-                            self.forceY_br_N,
-                            self.forceY_bl_N]
-            
-            force_graphics = list()
-            for forceX, forceY, locationX, locationY in zip(wheel_forcesX,
-                                                        wheel_forcesY,
-                                                        wheel_loc_x_glob_ref,
-                                                        wheel_loc_y_glob_ref):
+        wheel_x_glob_ref = \
+            rot_x_pts(wheel_x_car_ref, wheel_y_car_ref, rot_global)
         
-                forceX_glob_ref = rot_x_pts(forceX,
-                                            forceY,
-                                            self.yaw_angle_rad)
-                
-                forceY_glob_ref = rot_y_pts(forceX,
-                                            forceY,
-                                            self.yaw_angle_rad)
+        wheel_y_glob_ref = \
+            rot_y_pts(wheel_x_car_ref, wheel_y_car_ref, rot_global)
 
-                force_graphics.append(
-                    ax.quiver(
-                        locationX,
-                        locationY,
-                        forceX_glob_ref,
-                        forceY_glob_ref,
-                        scale=1000,
-                        scale_units='x',
-                        width=0.001,
-                        headlength=3,
-                        headaxislength=3,
-                        color='red'
-                        
-                    )
-                )
-
-                # ax.annotate(
-                #     text = f"{np.hypot(self.forceX_fl_N, self.forceY_fl_N):.2f}",
-                #     xy = (locationX, locationY),
-                #     xytext = (locationX + forceX_glob_ref/1000,
-                #         locationY + forceY_glob_ref/1000),
-                #     # xy = (locationX + forceX_glob_ref/1000,
-                #     #     locationY + forceY_glob_ref/1000),
-                #     # xytext = (locationX, locationY),
-                #     arrowprops = dict(
-                #                 arrowstyle = '<-',
-                #                 relpos = (0,0),
-                #                 shrinkA = 0,
-                #                 shrinkB = 0,
-                #                 edgecolor = 'red'
-                #                 )
-                # )
-
-            return force_graphics
+        inputs = (np.append(wheel_x_glob_ref, wheel_x_glob_ref[0]), 
+                  np.append(wheel_y_glob_ref, wheel_y_glob_ref[0]))
         
-        def display_velocities():
-            vel_cg_x = self.velocity_mps*np.cos(self.side_slip_rad)
-            vel_cg_y = self.velocity_mps*np.sin(self.side_slip_rad)
-            vel_cg_x_glob_ref = rot_x_pts(vel_cg_x, vel_cg_y, self.yaw_angle_rad)
-            vel_cg_y_glob_ref = rot_y_pts(vel_cg_x, vel_cg_y, self.yaw_angle_rad)
-            vel_cg_graphic = \
-                ax.quiver(
-                    0,
-                    0,
-                    vel_cg_x_glob_ref,
-                    vel_cg_y_glob_ref,
-                    scale=10,
-                    scale_units='x',
-                    width=0.001,
-                    headlength=3,
-                    headaxislength=3,
-                    color='black')
+        wheel_lines_glob_ref.append(ax.plot(*inputs, color='black'))
 
-            vel_wheel_graphics = list()
-            yaw_rate = self.velocity_mps/self.path_radius_m
-            for wheel_x, wheel_y in zip(wheel_locations_x_m, wheel_locations_y_m):
-                vel_wheel_x = vel_cg_x - yaw_rate*wheel_y
-                vel_wheel_y = vel_cg_y + yaw_rate*wheel_x
-                
-                vel_wheel_x_glob_ref = \
-                    rot_x_pts(vel_wheel_x, vel_wheel_y, self.yaw_angle_rad)
-                vel_wheel_y_glob_ref = \
-                    rot_y_pts(vel_wheel_x, vel_wheel_y, self.yaw_angle_rad)
-                
-                wheel_x_glob_ref = \
-                    rot_x_pts(wheel_x, wheel_y, self.yaw_angle_rad)
-                wheel_y_glob_ref = \
-                    rot_y_pts(wheel_x, wheel_y, self.yaw_angle_rad)
-                
-                vel_wheel_graphics.append(
-                    ax.quiver(
-                        wheel_x_glob_ref,
-                        wheel_y_glob_ref,
-                        vel_wheel_x_glob_ref,
-                        vel_wheel_y_glob_ref,
-                        scale=10,
-                        scale_units='x',
-                        width=0.001,
-                        headlength=3,
-                        headaxislength=3,
-                        color='black'
-                    )
-                )
+    #endregion
 
-            return vel_cg_graphic, vel_wheel_graphics
+    #region - Center of gravity velocity visualization
+
+    vel_cg_x = motion_state.velocity*np.cos(motion_state.side_slip)
+    vel_cg_y = motion_state.velocity*np.sin(motion_state.side_slip)
+    
+    vel_cg_x_glob_ref = rot_x_pts(vel_cg_x, vel_cg_y, rot_global)
+    vel_cg_y_glob_ref = rot_y_pts(vel_cg_x, vel_cg_y, rot_global)
+    
+    vel_cg_graphic = ax.quiver(0, 0, vel_cg_x_glob_ref, vel_cg_y_glob_ref,
+                               scale=10, scale_units='x', width=0.001,
+                               headlength=3, headaxislength=3, color='black')    
+    
+    #endregion
+
+    #region - Velocity of individual wheels visualization
+    
+    vel_wheel_graphics = list()
+    for wheel_x, wheel_y in zip(wheel_locations_x_m, wheel_locations_y_m):
         
-        def display_path_radii():
-            vel_cg_x = self.velocity_mps*np.cos(self.side_slip_rad)
-            vel_cg_y = self.velocity_mps*np.sin(self.side_slip_rad)
-            
-            unit_normal_to_vel_cg_x = -vel_cg_y/self.velocity_mps
-            unit_normal_to_vel_cg_y = +vel_cg_x/self.velocity_mps
-            
-            path_radius_cg_x = self.path_radius_m*unit_normal_to_vel_cg_x
-            path_radius_cg_y = self.path_radius_m*unit_normal_to_vel_cg_y
+        # The yaw velocity component is the cross product between yaw rate
+        # vector and wheel position with respect to the vehicle CG:
+        vel_yaw_x = -motion_state.dyaw_dt*wheel_y
+        vel_yaw_y = +motion_state.dyaw_dt*wheel_x
 
-            path_radius_cg_glob_ref_x = \
-                rot_x_pts(path_radius_cg_x, path_radius_cg_y, self.yaw_angle_rad)
-            path_radius_cg_glob_ref_y = \
-                rot_y_pts(path_radius_cg_x, path_radius_cg_y, self.yaw_angle_rad)
+        vel_wheel_x = vel_cg_x + vel_yaw_x
+        vel_wheel_y = vel_cg_y + vel_yaw_y
+        
+        vel_wheel_x_glob_ref = \
+            rot_x_pts(vel_wheel_x, vel_wheel_y, rot_global)
+        vel_wheel_y_glob_ref = \
+            rot_y_pts(vel_wheel_x, vel_wheel_y, rot_global)
+        
+        wheel_x_glob_ref = \
+            rot_x_pts(wheel_x, wheel_y, rot_global)
+        wheel_y_glob_ref = \
+            rot_y_pts(wheel_x, wheel_y, rot_global)
+        
+        vel_wheel_graphics.append(
+            ax.quiver(wheel_x_glob_ref, wheel_y_glob_ref,
+                      vel_wheel_x_glob_ref, vel_wheel_y_glob_ref,
+                      scale=10, scale_units='x', width=0.001, headlength=3, 
+                      headaxislength=3, color='black'))
+        
+    #endregion
 
-            path_radius_cg_graphic = \
-                ax.plot(
-                    [0, path_radius_cg_glob_ref_x],
-                    [0, path_radius_cg_glob_ref_y],
-                    color='grey',
-                    marker='x',
-                    linestyle='dashed',
-                    linewidth=1)
-            
-            path_radius_wheel_graphics = list()
-            for wheel_x, wheel_y in zip(wheel_locations_x_m, wheel_locations_y_m):
-                
-                wheel_glob_ref_x = \
-                    rot_x_pts(wheel_x, wheel_y, self.yaw_angle_rad)
-                wheel_glob_ref_y = \
-                    rot_y_pts(wheel_x, wheel_y, self.yaw_angle_rad)
-                
-                path_radius_wheel_graphics.append(
-                    ax.plot(
-                    [wheel_glob_ref_x, path_radius_cg_glob_ref_x],
+    #region - Path radius of CG visualization
+    
+    unit_normal_to_vel_cg_x = -vel_cg_y/motion_state.velocity
+    unit_normal_to_vel_cg_y = +vel_cg_x/motion_state.velocity
+    
+    path_radius_cg_x = motion_state.radius_of_turn*unit_normal_to_vel_cg_x
+    path_radius_cg_y = motion_state.radius_of_turn*unit_normal_to_vel_cg_y
+
+    path_radius_cg_glob_ref_x = \
+        rot_x_pts(path_radius_cg_x, path_radius_cg_y, rot_global)
+    path_radius_cg_glob_ref_y = \
+        rot_y_pts(path_radius_cg_x, path_radius_cg_y, rot_global)
+
+    path_radius_cg_graphic = \
+        ax.plot([0, path_radius_cg_glob_ref_x],
+                [0, path_radius_cg_glob_ref_y],
+                color='grey', marker='x', linestyle='dashed', linewidth=1)
+    
+    #endregion
+
+    #region - Path radii of individual wheels
+    
+    path_radius_wheel_graphics = list()
+    for wheel_x, wheel_y in zip(wheel_locations_x_m, wheel_locations_y_m):
+        
+        wheel_glob_ref_x = \
+            rot_x_pts(wheel_x, wheel_y, rot_global)
+        wheel_glob_ref_y = \
+            rot_y_pts(wheel_x, wheel_y, rot_global)
+        
+        path_radius_wheel_graphics.append(
+            ax.plot([wheel_glob_ref_x, path_radius_cg_glob_ref_x],
                     [wheel_glob_ref_y, path_radius_cg_glob_ref_y],
-                    color='grey',
-                    linestyle='dashed',
-                    linewidth=1)
-                )
-
-            return path_radius_cg_graphic, path_radius_wheel_graphics
+                    color='grey', linestyle='dashed', linewidth=1))
         
-        rot_x_pts = lambda x,y,ang: x*np.cos(ang) - y*np.sin(ang)
-        rot_y_pts = lambda x,y,ang: x*np.sin(ang) + y*np.cos(ang)
+    #endregion
 
-        local_variables = locals()
-        if 'fig' not in local_variables and 'ax' not in local_variables:
-            fig, ax = plt.subplots()
+    #region - Force of individual wheels visualization
 
-        lf = self.car.cg_to_front_m
-        lb = self.car.cg_to_back_m
-        wf = self.car.track_front_m
-        wb = self.car.track_back_m
-        R = self.path_radius_m
-        steer = self.steer_after_rack_rad
+    wheel_forces = calc_wheel_forces(car,
+                                     tire_front=tire_front,
+                                     tire_rear=tire_rear,
+                                     wheel_angles=wheel_angles,
+                                     side_slip_rad=motion_state.side_slip)
 
-        body_lines_glob_ref = display_vehicle_body()
+    wheel_forcesX = [wheel_forces.Fx_fl, wheel_forces.Fx_fr,
+                     wheel_forces.Fx_bl, wheel_forces.Fx_br]
+
+    wheel_forcesY = [wheel_forces.Fy_fl, wheel_forces.Fy_fr,
+                     wheel_forces.Fy_bl, wheel_forces.Fy_br]
+    
+    force_graphics = list()
+    for forceX, forceY, locationX, locationY in zip(wheel_forcesX,
+                                                    wheel_forcesY,
+                                                    wheel_locations_x_m,
+                                                    wheel_locations_y_m):
+
+        wheel_loc_x_glob_ref = rot_x_pts(locationX, locationY, rot_global)
+        wheel_loc_y_glob_ref = rot_y_pts(locationX, locationY, rot_global)
         
-        wheel_locations_x_m = np.array([+lf,+lf,-lb,-lb])
-        wheel_locations_y_m = np.array([+wf/2,-wf/2,-wb/2,+wb/2])
+        forceX_glob_ref = rot_x_pts(forceX, forceY, rot_global)
+        forceY_glob_ref = rot_y_pts(forceX, forceY, rot_global)
 
-        wheel_loc_x_glob_ref = rot_x_pts(wheel_locations_x_m,
-                                        wheel_locations_y_m,
-                                        self.yaw_angle_rad)
-        
-        wheel_loc_y_glob_ref = rot_y_pts(wheel_locations_x_m,
-                                        wheel_locations_y_m,
-                                        self.yaw_angle_rad)
-        
-        wheel_lines_glob_ref = display_wheels()
-        force_graphics = display_forces()
-        vel_cg_graphic, vel_wheel_graphics = display_velocities()
-        path_radius_cg_graphic, path_radius_wheel_graphics = display_path_radii()
-
-        ax.set_aspect('equal')
-        ax.grid(visible=False)
-        fig.show()
-        print()
-
-    def find_stationary_point(self,
-                              state_names: List[str],
-                              state_values_SI: List[float]):
-        
-        def parse_state_input(input_state_names,
-                              input_state_values_SI):
-            
-            def input_validation(input, valid_state_names):
-                matches = [state for state in valid_state_names 
-                        if state.startswith(input.lower())]
-                
-                if len(matches) == 0:
-                    raise ValueError(f"No match found for '{input}'. \
-                                    Options: {valid_state_names}")
-                elif len(matches) > 1:
-                    raise ValueError(f"Ambiguous match '{input}'. \
-                                    Could be {matches}")
-            
-                return matches[0]
-            
-            validated_state_names = list()
-            for state_name, state_value in \
-                zip(input_state_names, input_state_values_SI):
-                
-                validated_state_name = \
-                    input_validation(state_name, self.valid_state_names)
-                
-                validated_state_names.append(validated_state_name)
-
-                attribute_name = self.state_name_dict[validated_state_name]
-                setattr(self, attribute_name, state_value)
-            
-            if len(validated_state_names) != 2:
-                raise ValueError(f"Exactly two states from \
-                                 '{self.valid_state_names}' should be informed")
-            
-            return validated_state_names
-        
-        def calc_init_guess(state_names):
-            m = self.car.mass_kg
-            lf = self.car.cg_to_front_m
-            lb = self.car.cg_to_back_m
-            mf = m*lb/(lf+lb)
-            mb = m*lf/(lf+lb)
-            cf_twin = 2*self.tire_front.cornering_stiffness_NperRad
-            cb_twin = 2*self.tire_rear.cornering_stiffness_NperRad
-
-            EG = mf/cf_twin - mb/cb_twin
-            SG = -mb/cb_twin
-
-            # {"velocity", "steering", "radius", "sideslip"}
-            if set(state_names) == set(["velocity", "steering"]):
-                v = self.velocity_mps
-                s = self.steer_after_rack_rad
-                
-                R = ((lf+lb) + EG*v**2)/s
-                slip = s*((lb + SG*v**2)/((lf+lb) + EG*v**2))
-
-                states_to_solve_for = ["radius", "sideslip"]
-                x0 = [R, slip]
-
-                self.velocity_STM_mps = v
-                self.steer_after_rack_STM_rad = s
-                self.path_radius_STM_m = R
-                self.side_slip_STM_rad = slip
-
-            elif set(state_names) == set(["velocity", "radius"]):
-                v = self.velocity_mps
-                R = self.path_radius_m
-
-                s = ((lf+lb) + EG*v**2)/R
-                slip = (lb + SG*v**2)/R
-
-                states_to_solve_for = ["sideslip", "steer"]
-                x0 = [slip, s]
-
-                self.velocity_STM_mps = v
-                self.path_radius_STM_m = R
-                self.steer_after_rack_STM_rad = s
-                self.side_slip_STM_rad = slip
-
-            elif set(state_names) == set(["velocity", "sideslip"]):
-                v = self.velocity_mps
-                slip = self.side_slip_rad
-                
-                R = (lb + SG*v**2)/slip
-                s = slip*((lf+lb) + EG*v**2)/(lb + SG*v**2)
-                
-                states_to_solve_for = ["radius", "steer"]
-                x0 = [R, s]
-
-                self.velocity_STM_mps = v
-                self.side_slip_STM_rad = slip
-                self.path_radius_STM_m = R
-                self.steer_after_rack_STM_rad = s
-
-            elif set(state_names) == set(["steering", "radius"]):
-                s = self.steer_after_rack_rad
-                R = self.path_radius_m
-
-                v = np.sqrt((R*s - (lf+lb))/EG)
-                slip = lb/R + SG/EG*(s - (lf+lb)/R)
-
-                states_to_solve_for = ["velocity", "sideslip"]
-                x0 = [v, slip]
-
-                self.steer_after_rack_STM_rad = s
-                self.path_radius_STM_m = R
-                self.velocity_STM_mps = v
-                self.side_slip_STM_rad = slip
-
-            elif set(state_names) == set(["steering", "sideslip"]):
-                s = self.steer_after_rack_rad
-                slip = self.side_slip_rad
-
-                v = np.sqrt((s*lb - slip*(lf+lb))/(slip*EG - s*SG))
-                R = ((lf+lb) + EG*v**2)/s
-
-                states_to_solve_for = ["velocity", "radius"]
-                x0 = [v, R]
-
-                self.steer_after_rack_STM_rad = s
-                self.side_slip_STM_rad = slip
-                self.velocity_STM_mps = v
-                self.path_radius_STM_m = R
-
-            elif set(state_names) == set(["sideslip", "radius"]):
-                slip = self.side_slip_rad
-                R = self.path_radius_m
-
-                s = (lf+lb)/R + EG/SG*(slip - lb/R)
-                v = np.sqrt((R*slip - lb)/SG)
-
-                states_to_solve_for = ["velocity", "steering"]
-                x0 = [v, s]
-
-                self.side_slip_STM_rad = slip
-                self.path_radius_STM_m = R
-                self.steer_after_rack_STM_rad = s
-                self.velocity_STM_mps = v
-
-            return states_to_solve_for, x0
-
-        def objective_function(x):
-            for state, value in zip(states_to_solve_for, x):
-                setattr(self, self.state_name_dict[state], value)
-
-            self.calc_wheel_angles()
-            self.calc_forces()
-
-            self.force_centripetal_N = \
-                self.force_norm_fl + self.force_norm_fr + \
-                    self.force_norm_bl + self.force_norm_br
-
-            self.force_centrifugal_N = \
-                self.car.mass_kg*self.velocity_mps**2/self.path_radius_m
-            
-            force_resultant = \
-                self.force_centripetal_N + self.force_centrifugal_N
-            
-            self.calc_moments()
-            
-            return [force_resultant, self.moment_yaw_Nm]
-
-        validated_state_names = parse_state_input(state_names, state_values_SI)
-
-        states_to_solve_for, x0 = calc_init_guess(validated_state_names)
-        
-        sol = root(objective_function, x0 = x0)
-        self.visualize_vehicle_state()
+        force_graphics.append(
+            ax.quiver(wheel_loc_x_glob_ref, wheel_loc_y_glob_ref,
+                      forceX_glob_ref, forceY_glob_ref,
+                      scale=1000, scale_units='x', width=0.001, headlength=3,
+                      headaxislength=3, color='red'))
+      
+    #endregion
 
 if __name__ == "__main__":
     car = Vehicle(cg_to_front_m = 2.0,
                   cg_to_back_m = 2.0,
-                  toe_front_deg = 0.0,
-                  toe_back_deg = 0.0,
+                  toe_out_front_deg = 0.0,
+                  toe_out_back_deg = 0.0,
                   track_front_m=1.8,
-                  track_back_m=2)
+                  track_back_m=2,
+                  ackermann_factor=1,
+                  steer_ratio_before_over_after_rack= 13)
     
     tire_front = Tire(cornering_stiffness_NperRad=20000)
     tire_rear = Tire()
-    simulation = Simulation(car=car,
-                            tire_front=tire_front,
-                            tire_rear=tire_rear)
+
+    result_set = ssc_single_track(car,
+                           tire_front=tire_front,
+                           tire_rear=tire_rear,
+                           input={"side_slip": -2/57.3, "velocity": 50/3.6})
     
-    simulation.find_stationary_point(state_names=["vel", "steer"],
-                                     state_values_SI=[30/3.6, -25/57.3])
+    fig, ax = plt.subplots()
+    ax.set_aspect('equal')
+    visualize_vehicle(ax, result_set)
+    print()
