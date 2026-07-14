@@ -1,4 +1,5 @@
 import numpy as np
+import numpy.typing as npt
 
 from scipy.optimize import root
 from scipy.integrate import solve_ivp
@@ -32,9 +33,10 @@ class Vehicle:
         Yaw inertia is calculated based on the moment of inertia of a rectangle
         with the previously informed dimensions
         '''
+        wheelbase_m = self.cg_to_front_m + self.cg_to_back_m
         track_mean_m = (self.track_front_m + self.track_back_m)/2
         rectangle_inertia_kgm2 = \
-            1/12*self.mass_kg*(track_mean_m**2 + self.wheelbase_m**2)
+            1/12*self.mass_kg*(track_mean_m**2 + wheelbase_m**2)
 
         return rectangle_inertia_kgm2*self.yaw_inertia_multiplier
 
@@ -84,11 +86,11 @@ def calc_wheel_angles(
 
     # Calculation
     steer_fl_rad = \
-        np.atan2(np.tan(steer), 1 - ack*wf/2*np.tan(steer)/(lf+lb)) \
+        np.atan2(np.tan(steer), 1 - ack*(wf/2)*np.tan(steer)/(lf+lb)) \
             + toe_f*np.sign(steer)
 
     steer_fr_rad = \
-        np.atan2(np.tan(steer), 1 + ack*wf/2*np.tan(steer)/(lf+lb)) \
+        np.atan2(np.tan(steer), 1 + ack*(wf/2)*np.tan(steer)/(lf+lb)) \
             - toe_f*np.sign(steer)
     
     #endregion
@@ -238,10 +240,10 @@ def calc_wheel_forces(
 
 @dataclass
 class WheelMoments:
-    Myaw_fl: float
-    Myaw_fr: float
-    Myaw_bl: float
-    Myaw_br: float
+    Myaw_fl: npt.ArrayLike
+    Myaw_fr: npt.ArrayLike
+    Myaw_bl: npt.ArrayLike
+    Myaw_br: npt.ArrayLike
 
 def calc_wheel_moments(
         car: Vehicle,
@@ -326,13 +328,17 @@ def validate_ssc_input(function):
 
 @dataclass
 class MotionState:
-    radius_of_turn: float
-    side_slip: float
-    steering_wheel_input: float
-    velocity: float
-    dyaw_dt: float
-    d2yaw_dt2: float
-    dside_slip_dt: float
+    radius_of_turn: npt.ArrayLike
+    side_slip: npt.ArrayLike
+    steering_wheel_input: npt.ArrayLike
+    velocity: npt.ArrayLike
+    dyaw_dt: npt.ArrayLike
+    d2yaw_dt2: npt.ArrayLike
+    dside_slip_dt: npt.ArrayLike
+    Fcent: npt.ArrayLike
+    Myaw_f: npt.ArrayLike
+    Myaw_b: npt.ArrayLike
+    Myaw: npt.ArrayLike
 
 @dataclass
 class ResultSet:
@@ -340,6 +346,9 @@ class ResultSet:
     tire_front: Tire
     tire_rear: Tire
     motion_state: MotionState
+    wheel_angles: WheelAngles
+    wheel_forces: WheelForces
+    wheel_moments: WheelMoments
 
 @validate_ssc_input
 def ssc_single_track(
@@ -408,9 +417,52 @@ def ssc_single_track(
             R = ((lf+lb) + EG*v**2)/s
             slip = s*((lb + SG*v**2)/((lf+lb) + EG*v**2))
 
+    alpha_f = slip - lf/R
+    alpha_b = slip - lb/R
+    
+    Ff = cf_twin * alpha_f
+    Fb = cb_twin * alpha_b
+    Fcent = Ff + Fb
+    
+    Myaw_f = Ff * lf
+    Myaw_b = Fb * lb
+    Myaw = Myaw_f + Myaw_b
+    
     # Definition of output and return statement
-    motion_state = MotionState(R, slip, s*steer_ratio, v, v/R, 0, 0)
-    result_set = ResultSet(car, tire_front, tire_rear, motion_state)
+
+    wheel_angles = WheelAngles(steer_fl=s,
+                               steer_fr=s,
+                               alpha_fl=alpha_f,
+                               alpha_fr=alpha_f,
+                               alpha_bl=alpha_b,
+                               alpha_br=alpha_b)
+    
+    wheel_forces = WheelForces(Fx_fl=0, Fy_fl=Ff/2,
+                               Fx_fr=0, Fy_fr=Ff/2,
+                               Fx_bl=0, Fy_bl=Fb/2,
+                               Fx_br=0, Fy_br=Fb/2,
+                               Fn_fl=Ff/2, Ft_fl=0,
+                               Fn_fr=Ff/2, Ft_fr=0,
+                               Fn_bl=Fb/2, Ft_bl=0,
+                               Fn_br=Fb/2, Ft_br=0)
+    
+    wheel_moments = WheelMoments(Myaw_fl=Myaw_f/2, Myaw_fr=Myaw_f/2,
+                                 Myaw_bl=Myaw_b/2, Myaw_br=Myaw_b/2)
+    
+    motion_state = MotionState(radius_of_turn=R,
+                               side_slip=slip,
+                               steering_wheel_input=s*steer_ratio,
+                               velocity=v,
+                               dyaw_dt=v/R,
+                               d2yaw_dt2=0,
+                               dside_slip_dt=0,
+                               Fcent=Fcent,
+                               Myaw_f=Myaw_f,
+                               Myaw_b=Myaw_b,
+                               Myaw=Myaw)
+    
+    result_set = ResultSet(car, tire_front, tire_rear, motion_state,
+                           wheel_angles, wheel_forces, wheel_moments)
     
     return result_set
 
@@ -574,6 +626,10 @@ def steady_state_cornering(
                 solution.x[1],
                 np.nan,
                 np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
                 np.nan)
 
         case ("radius_of_turn_m", "steering_wheel_input_rad"):
@@ -582,6 +638,10 @@ def steady_state_cornering(
                 solution.x[0],
                 input["steering_wheel_input_rad"],
                 solution.x[1],
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
                 np.nan,
                 np.nan,
                 np.nan)
@@ -594,6 +654,10 @@ def steady_state_cornering(
                 input["velocity_m_s"],
                 np.nan,
                 np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
                 np.nan)
             
         case ("side_slip_rad", "steering_wheel_input_rad"):
@@ -602,6 +666,10 @@ def steady_state_cornering(
                 input["side_slip_rad"],
                 input["steering_wheel_input_rad"],
                 solution.x[1],
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
                 np.nan,
                 np.nan,
                 np.nan)
@@ -614,6 +682,10 @@ def steady_state_cornering(
                 input["velocity_m_s"],
                 np.nan,
                 np.nan,
+                np.nan.
+                np.nan,
+                np.nan,
+                np.nan,
                 np.nan)
 
         case ("steering_wheel_input_rad", "velocity_m_s"):
@@ -624,22 +696,332 @@ def steady_state_cornering(
                 input["velocity_m_s"],
                 np.nan,
                 np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
+                np.nan,
                 np.nan)
 
     #endregion
 
     #region - Definition of result_set to be returned
-    
+
     # Motion state parameters given steady state condition
     motion_state.dyaw_dt = motion_state.velocity/motion_state.radius_of_turn
     motion_state.d2yaw_dt2 = 0
     motion_state.dside_slip_dt = 0
+    
+    wheel_angles = calc_wheel_angles(
+        car,
+        steering_wheel_input_rad=motion_state.steering_wheel_input,
+        side_slip_rad=motion_state.side_slip,
+        dyaw_dt_rad_s=motion_state.dyaw_dt,
+        velocity_m_s=motion_state.velocity)
+    
+    wheel_forces = calc_wheel_forces(
+        car,
+        tire_front=tire_front,
+        tire_rear=tire_rear,
+        wheel_angles=wheel_angles,
+        side_slip_rad=motion_state.side_slip)
+    
+    wheel_moments = calc_wheel_moments(
+        car,
+        wheel_forces=wheel_forces)
+    
+    motion_state.Fcent = (wheel_forces.Fn_fl + wheel_forces.Fn_fr +
+                          wheel_forces.Fn_bl + wheel_forces.Fn_br)
+    
+    motion_state.Myaw_f = wheel_moments.Myaw_fl + wheel_moments.Myaw_fr
+    motion_state.Myaw_b = wheel_moments.Myaw_bl + wheel_moments.Myaw_br
+    motion_state.Myaw = motion_state.Myaw_f + motion_state.Myaw_b
 
-    result_set = ResultSet(car, tire_front, tire_rear, motion_state)
+    result_set = ResultSet(
+        car=car,
+        tire_front=tire_front,
+        tire_rear=tire_rear,
+        motion_state=motion_state,
+        wheel_angles=wheel_angles,
+        wheel_forces=wheel_forces,
+        wheel_moments=wheel_moments)
 
     #endregion
 
     return result_set, solution
+
+def calc_slip_ang_trans(
+        slip_ang_static_rad: float,
+        velocity_m_s: float,
+        relaxation_length_m: float,
+        slip_angle_previous_t_step: float,
+        time_delta_s: float
+        ) -> float:
+    
+    dalpha_dt = ((velocity_m_s / relaxation_length_m) * 
+                 (slip_ang_static_rad - slip_angle_previous_t_step))
+    
+    slip_angle_trans_rad = (slip_angle_previous_t_step + 
+                            dalpha_dt * time_delta_s)
+
+    return slip_angle_trans_rad
+
+def create_step_function(t_total: float, t_step: float, t_rise: float,
+                         t_start: float, height: float = 1) -> npt.NDArray:
+    
+    time = np.arange(0, t_total, t_step)
+    step = np.zeros_like(time)
+
+    for i, t in enumerate(time):
+        if t < t_start:
+            step[i] = 0.0
+        elif t < t_start + t_rise:
+            step[i] = height * (t - t_start) / t_rise
+        else:
+            step[i] = height
+
+    return step
+
+@dataclass
+class InitialConditions:
+    side_slip_0: float
+    dyaw_dt_0: float
+    dside_slip_dt_0: float
+    d2yaw_dt2_0: float
+
+def transient_maneuver(
+        car: Vehicle,
+        *,
+        tire_front: Tire,
+        tire_rear: Tire,
+        time_end_s: float,
+        time_step_s: float,
+        initial_conditions_SI: InitialConditions = InitialConditions(0,0,0,0),
+        velocity_m_s: float,
+        steering_wheel_input_f_of_t_rad: npt.NDArray[np.float64]
+        ) -> ResultSet:
+
+    time = np.arange(0, time_end_s, time_step_s)
+
+    if steering_wheel_input_f_of_t_rad.shape != time.shape:
+        raise ValueError(
+            f"Input size mismatch! Expected 'steering_wheel_input_f_of_t_rad'"
+            f"to be of shape {time.shape} due to the given time input, but got"
+            f"{steering_wheel_input_f_of_t_rad.shape} instead."
+        )
+
+    #region - Preallocation of arrays
+
+    np.full(len(time), np.nan)
+
+    side_slip = np.full(len(time), np.nan)
+    dyaw_dt = np.full(len(time), np.nan)
+    dside_slip_dt = np.full(len(time), np.nan)
+    d2yaw_dt2 = np.full(len(time), np.nan)
+    radius_of_turn = np.full(len(time), np.nan)
+
+    side_slip[0] = initial_conditions_SI.side_slip_0
+    dyaw_dt[0] = initial_conditions_SI.dyaw_dt_0
+    dside_slip_dt[0] = initial_conditions_SI.dside_slip_dt_0
+    d2yaw_dt2[0] = initial_conditions_SI.d2yaw_dt2_0
+    radius_of_turn[0] = velocity_m_s / (dyaw_dt[0] + side_slip[0])
+
+    steer_fl = np.full(len(time), np.nan)
+    steer_fr = np.full(len(time), np.nan)
+
+    alpha_static_fl = np.full(len(time), np.nan)
+    alpha_static_fr = np.full(len(time), np.nan)
+    alpha_static_bl = np.full(len(time), np.nan)
+    alpha_static_br = np.full(len(time), np.nan)
+    alpha_trans_fl = np.full(len(time), np.nan)
+    alpha_trans_fr = np.full(len(time), np.nan)
+    alpha_trans_bl = np.full(len(time), np.nan)
+    alpha_trans_br = np.full(len(time), np.nan)
+
+    Fx_fl = np.full(len(time), np.nan)
+    Fy_fl = np.full(len(time), np.nan)
+    Fx_fr = np.full(len(time), np.nan)
+    Fy_fr = np.full(len(time), np.nan)
+    Fx_bl = np.full(len(time), np.nan)
+    Fy_bl = np.full(len(time), np.nan)
+    Fx_br = np.full(len(time), np.nan)
+    Fy_br = np.full(len(time), np.nan)
+    Fn_fl = np.full(len(time), np.nan)
+    Ft_fl = np.full(len(time), np.nan)
+    Fn_fr = np.full(len(time), np.nan)
+    Ft_fr = np.full(len(time), np.nan)
+    Fn_bl = np.full(len(time), np.nan)
+    Ft_bl = np.full(len(time), np.nan)
+    Fn_br = np.full(len(time), np.nan)
+    Ft_br = np.full(len(time), np.nan)
+
+    Myaw_fl = np.full(len(time), np.nan)
+    Myaw_fr = np.full(len(time), np.nan)
+    Myaw_bl = np.full(len(time), np.nan)
+    Myaw_br = np.full(len(time), np.nan)
+
+    Fcent = np.full(len(time), np.nan)
+    Myaw_f = np.full(len(time), np.nan)
+    Myaw_b = np.full(len(time), np.nan)
+    Myaw = np.full(len(time), np.nan)
+
+    #endregion
+
+    #region - Time loop
+
+    for t_idx in range(len(time[:-1])):
+        wheel_angles_static = calc_wheel_angles(
+            car,
+            steering_wheel_input_rad=steering_wheel_input_f_of_t_rad[t_idx],
+            side_slip_rad=side_slip[t_idx],
+            dyaw_dt_rad_s=dyaw_dt[t_idx],
+            velocity_m_s=velocity_m_s
+            )
+        
+        steer_fl[t_idx] = wheel_angles_static.steer_fl
+        steer_fr[t_idx] = wheel_angles_static.steer_fr
+        alpha_static_fl[t_idx] = wheel_angles_static.alpha_fl
+        alpha_static_fr[t_idx] = wheel_angles_static.alpha_fr
+        alpha_static_bl[t_idx] = wheel_angles_static.alpha_bl
+        alpha_static_br[t_idx] = wheel_angles_static.alpha_br
+
+        if t_idx == 0:
+            alpha_trans_fl[0] = alpha_static_fl[0]
+            alpha_trans_fr[0] = alpha_static_fr[0]
+            alpha_trans_bl[0] = alpha_static_bl[0]
+            alpha_trans_br[0] = alpha_static_br[0]
+        
+        alpha_trans_fl[t_idx+1] = calc_slip_ang_trans(
+            alpha_static_fl[t_idx],
+            velocity_m_s,
+            tire_front.relaxation_length_m,
+            alpha_trans_fl[t_idx],
+            time_step_s)
+        
+        alpha_trans_fr[t_idx+1] = calc_slip_ang_trans(
+            alpha_static_fr[t_idx],
+            velocity_m_s,
+            tire_front.relaxation_length_m,
+            alpha_trans_fr[t_idx],
+            time_step_s)
+        
+        alpha_trans_bl[t_idx+1] = calc_slip_ang_trans(
+            alpha_static_bl[t_idx],
+            velocity_m_s,
+            tire_front.relaxation_length_m,
+            alpha_trans_bl[t_idx],
+            time_step_s)
+        
+        alpha_trans_br[t_idx+1] = calc_slip_ang_trans(
+            alpha_static_br[t_idx],
+            velocity_m_s,
+            tire_front.relaxation_length_m,
+            alpha_trans_br[t_idx],
+            time_step_s)
+        
+        wheel_angles_trans = WheelAngles(
+            wheel_angles_static.steer_fl,
+            wheel_angles_static.steer_fr,
+            alpha_trans_fl[t_idx],
+            alpha_trans_fr[t_idx],
+            alpha_trans_bl[t_idx],
+            alpha_trans_br[t_idx])
+        
+        wheel_forces = calc_wheel_forces(car,
+                                         tire_front=tire_front,
+                                         tire_rear=tire_rear,
+                                         wheel_angles=wheel_angles_trans,
+                                         side_slip_rad=side_slip[t_idx])
+        
+        Fx_fl[t_idx] = wheel_forces.Fx_fl
+        Fy_fl[t_idx] = wheel_forces.Fy_fl
+        Fx_fr[t_idx] = wheel_forces.Fx_fr
+        Fy_fr[t_idx] = wheel_forces.Fy_fr
+        Fx_bl[t_idx] = wheel_forces.Fx_bl
+        Fy_bl[t_idx] = wheel_forces.Fy_bl
+        Fx_br[t_idx] = wheel_forces.Fx_br
+        Fy_br[t_idx] = wheel_forces.Fy_br
+        Fn_fl[t_idx] = wheel_forces.Fn_fl
+        Ft_fl[t_idx] = wheel_forces.Ft_fl
+        Fn_fr[t_idx] = wheel_forces.Fn_fr
+        Ft_fr[t_idx] = wheel_forces.Ft_fr
+        Fn_bl[t_idx] = wheel_forces.Fn_bl
+        Ft_bl[t_idx] = wheel_forces.Ft_bl
+        Fn_br[t_idx] = wheel_forces.Fn_br
+        Ft_br[t_idx] = wheel_forces.Ft_br
+        Fcent[t_idx] = (Fn_fl[t_idx] + Fn_fr[t_idx] + 
+                        Fn_bl[t_idx] + Fn_br[t_idx])
+
+        wheel_moments = calc_wheel_moments(car, wheel_forces)
+
+        Myaw_fl[t_idx] = wheel_moments.Myaw_fl
+        Myaw_fr[t_idx] = wheel_moments.Myaw_fr
+        Myaw_bl[t_idx] = wheel_moments.Myaw_bl
+        Myaw_br[t_idx] = wheel_moments.Myaw_br
+        Myaw_f[t_idx] = Myaw_fl[t_idx] + Myaw_fr[t_idx]
+        Myaw_b[t_idx] = Myaw_bl[t_idx] + Myaw_br[t_idx]
+        Myaw[t_idx] = Myaw_f[t_idx] + Myaw_b[t_idx]
+
+        side_slip[t_idx+1] = side_slip[t_idx] + (dside_slip_dt[t_idx] * time_step_s)
+        dside_slip_dt[t_idx+1] = Fcent[t_idx] / (car.mass_kg*velocity_m_s) - dyaw_dt[t_idx]
+        
+        dyaw_dt[t_idx+1] = dyaw_dt[t_idx] + (d2yaw_dt2[t_idx] * time_step_s)
+        d2yaw_dt2[t_idx+1] = Myaw[t_idx]/car.yaw_inertia_kgm2
+
+        radius_of_turn[t_idx+1] = velocity_m_s / (dyaw_dt[t_idx+1] + side_slip[t_idx+1])
+
+    #endregion
+    
+    #region - Definition of output
+
+    motion_state = MotionState(
+        radius_of_turn=radius_of_turn,
+        side_slip=side_slip,
+        steering_wheel_input=steering_wheel_input_f_of_t_rad,
+        velocity=velocity_m_s,
+        dyaw_dt=dyaw_dt,
+        dside_slip_dt=dside_slip_dt,
+        d2yaw_dt2=d2yaw_dt2,
+        Fcent=Fcent,
+        Myaw_f=Myaw_f,
+        Myaw_b=Myaw_b,
+        Myaw=Myaw)
+    
+    wheel_angles = WheelAngles(
+        steer_fl=steer_fl,
+        steer_fr=steer_fr,
+        alpha_fl=alpha_trans_fl,
+        alpha_fr=alpha_trans_fr,
+        alpha_bl=alpha_trans_bl,
+        alpha_br=alpha_trans_br)
+
+    wheel_forces = WheelForces(
+        Fx_fl=Fx_fl, Fy_fl=Fy_fl,
+        Fx_fr=Fx_fr, Fy_fr=Fy_fr,
+        Fx_bl=Fx_bl, Fy_bl=Fy_bl,
+        Fx_br=Fx_br, Fy_br=Fy_br,
+        Fn_fl=Fn_fl, Ft_fl=Ft_fl,
+        Fn_fr=Fn_fr, Ft_fr=Ft_fr,
+        Fn_bl=Fn_bl, Ft_bl=Ft_bl,
+        Fn_br=Fn_br, Ft_br=Ft_br)
+    
+    wheel_moments = WheelMoments(
+        Myaw_fl=Myaw_fl,
+        Myaw_fr=Myaw_fr,
+        Myaw_bl=Myaw_bl,
+        Myaw_br=Myaw_br)
+    
+    result_set = ResultSet(
+        car=car,
+        tire_front=tire_front,
+        tire_rear=tire_rear,
+        motion_state=motion_state,
+        wheel_angles=wheel_angles,
+        wheel_forces=wheel_forces,
+        wheel_moments=wheel_moments)
+
+    #endregion
+
+    return result_set
 
 def draw_moment(ax: Axes, pos_x: float, pos_y: float, moment: float,
                 scale_factor: float = 5e-5, color = 'red', linewidth = 1,
@@ -974,23 +1356,77 @@ if __name__ == "__main__":
                   track_back_m=2,
                   ackermann_factor=1,
                   steer_ratio_before_over_after_rack= 13)
+    car.yaw_inertia_kgm2 = car.yaw_inertia_estimation_kgm2()
     
     tire_front = Tire(cornering_stiffness_NperRad=20000)
     tire_rear = Tire()
 
-    input = {"radius": 12, "velocity": 20/3.6}
-    result_set_nonlin,_ = steady_state_cornering(car,
-                           tire_front=tire_front,
-                           tire_rear=tire_rear,
-                           input=input)
+    # input = {"radius": 12, "velocity": 20/3.6}
+    # result_set,_ = steady_state_cornering(car,
+    #                        tire_front=tire_front,
+    #                        tire_rear=tire_rear,
+    #                        input=input)
     
-    result_set_linear = ssc_single_track(car,
-                           tire_front=tire_front,
-                           tire_rear=tire_rear,
-                           input=input)
+    # result_set = ssc_single_track(car,
+    #                        tire_front=tire_front,
+    #                        tire_rear=tire_rear,
+    #                        input=input)
+
+    steer_step = create_step_function(5.0, 0.01, 0.05, 0.01, np.radians(90))
+    result_set_f_of_t = transient_maneuver(car, tire_front=tire_front, tire_rear=tire_rear,
+                       time_end_s=5.0, time_step_s=0.01, velocity_m_s=50/3.6,
+                       steering_wheel_input_f_of_t_rad=steer_step)
     
     fig, ax = plt.subplots()
     ax.set_aspect('equal')
-    visualize_vehicle(ax, result_set_nonlin)
-    fig.show()
-    print()
+    for i in range(len(result_set_f_of_t.wheel_angles.alpha_bl)):
+        motion_state = MotionState(
+            radius_of_turn=result_set_f_of_t.motion_state.radius_of_turn[i],
+            side_slip=result_set_f_of_t.motion_state.side_slip[i],
+            steering_wheel_input=result_set_f_of_t.motion_state.steering_wheel_input[i],
+            velocity=result_set_f_of_t.motion_state.velocity,
+            dyaw_dt=result_set_f_of_t.motion_state.dyaw_dt[i],
+            dside_slip_dt=result_set_f_of_t.motion_state.dside_slip_dt[i],
+            d2yaw_dt2=result_set_f_of_t.motion_state.d2yaw_dt2[i],
+            Fcent=result_set_f_of_t.motion_state.Fcent[i],
+            Myaw_f=result_set_f_of_t.motion_state.Myaw_f[i],
+            Myaw_b=result_set_f_of_t.motion_state.Myaw_b[i],
+            Myaw=result_set_f_of_t.motion_state.Myaw[i])
+    
+        wheel_angles = WheelAngles(
+            steer_fl=result_set_f_of_t.wheel_angles.steer_fl[i],
+            steer_fr=result_set_f_of_t.wheel_angles.steer_fr[i],
+            alpha_fl=result_set_f_of_t.wheel_angles.alpha_fl[i],
+            alpha_fr=result_set_f_of_t.wheel_angles.alpha_fr[i],
+            alpha_bl=result_set_f_of_t.wheel_angles.alpha_bl[i],
+            alpha_br=result_set_f_of_t.wheel_angles.alpha_br[i])
+
+        wheel_forces = WheelForces(
+            Fx_fl=result_set_f_of_t.wheel_forces.Fx_fl[i], Fy_fl=result_set_f_of_t.wheel_forces.Fy_fl[i],
+            Fx_fr=result_set_f_of_t.wheel_forces.Fx_fr[i], Fy_fr=result_set_f_of_t.wheel_forces.Fy_fr[i],
+            Fx_bl=result_set_f_of_t.wheel_forces.Fx_bl[i], Fy_bl=result_set_f_of_t.wheel_forces.Fy_bl[i],
+            Fx_br=result_set_f_of_t.wheel_forces.Fx_br[i], Fy_br=result_set_f_of_t.wheel_forces.Fy_br[i],
+            Fn_fl=result_set_f_of_t.wheel_forces.Fn_fl[i], Ft_fl=result_set_f_of_t.wheel_forces.Ft_fl[i],
+            Fn_fr=result_set_f_of_t.wheel_forces.Fn_fr[i], Ft_fr=result_set_f_of_t.wheel_forces.Ft_fr[i],
+            Fn_bl=result_set_f_of_t.wheel_forces.Fn_bl[i], Ft_bl=result_set_f_of_t.wheel_forces.Ft_bl[i],
+            Fn_br=result_set_f_of_t.wheel_forces.Fn_br[i], Ft_br=result_set_f_of_t.wheel_forces.Ft_br[i])
+        
+        wheel_moments = WheelMoments(
+            Myaw_fl=result_set_f_of_t.wheel_moments.Myaw_fl[i],
+            Myaw_fr=result_set_f_of_t.wheel_moments.Myaw_fr[i],
+            Myaw_bl=result_set_f_of_t.wheel_moments.Myaw_bl[i],
+            Myaw_br=result_set_f_of_t.wheel_moments.Myaw_br[i])
+        
+        result_set = ResultSet(
+            car=car,
+            tire_front=tire_front,
+            tire_rear=tire_rear,
+            motion_state=motion_state,
+            wheel_angles=wheel_angles,
+            wheel_forces=wheel_forces,
+            wheel_moments=wheel_moments)
+        
+        ax.clear()
+        visualize_vehicle(ax, result_set)
+        fig.show()
+        print()
