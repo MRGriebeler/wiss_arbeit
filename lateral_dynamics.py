@@ -1709,6 +1709,7 @@ def visu_generate_video(filename: str, result_set_array: ResultSet,
 def plot_time_series(result_set: ResultSet) -> tuple[Figure, Axes]:
     fig, axs = plt.subplots(2, 3)
     fig.subplots_adjust(wspace=0.45)
+    fig.set_size_inches(18,8)
 
     t = result_set.time
     axs[0,0].plot(t, result_set.motion_state.dyaw_dt,
@@ -1780,6 +1781,164 @@ def plot_time_series(result_set: ResultSet) -> tuple[Figure, Axes]:
 
     return fig, axs
 
+def plot_result_comparison(result_sets: list[ResultSet]) -> tuple[Figure, Axes]:
+    
+    fig, axs = plt.subplots(3, 3)
+    fig.subplots_adjust(wspace=0.45, hspace=0.45)
+    fig.set_size_inches(18,8)
+    fig.suptitle(
+        f'Vehicle Velocity = {result_sets[0].motion_state.velocity*3.6} km/h',
+        fontsize='xx-large')
+
+    label_mapping = {(False, False): 'DT,LA',
+                     (False, True): 'DT,SA',
+                     (True, False): 'ST,LA',
+                     (True, True): 'ST,SA'}
+
+    for result_set in result_sets:
+        t = result_set.time
+        axs[0,0].plot(t, result_set.motion_state.dyaw_dt,
+                      label=label_mapping[(result_set.single_track_on,
+                                           result_set.small_angles_on)])
+    axs[0,0].set_title('Yaw Velocity')
+    axs[0,0].set_ylabel('Angular Velocity (rad/s)')
+    ax_twin = axs[0,0].twinx()
+    ax_twin.set_ylim(np.degrees(axs[0,0].get_ylim()))
+    ax_twin.set_ylabel('Angular Velocity (deg/s)')
+
+    for result_set in result_sets:
+        t = result_set.time
+        axs[0,1].plot(t, result_set.motion_state.side_slip,
+                      label=label_mapping[(result_set.single_track_on,
+                                           result_set.small_angles_on)])
+    axs[0,1].set_title('Sideslip Angle')
+    axs[0,1].set_ylabel('Angle (rad)')
+    ax_twin = axs[0,1].twinx()
+    ax_twin.set_ylim(np.degrees(axs[0,1].get_ylim()))
+    ax_twin.set_ylabel('Angle (deg)')
+    
+    for result_set in result_sets:
+        t = result_set.time
+        axs[0,2].plot(t, 1/result_set.motion_state.radius_of_turn,
+                      label=label_mapping[(result_set.single_track_on,
+                                           result_set.small_angles_on)])
+    axs[0,2].set_title('Inst. Turning Radius')
+    axs[0,2].set_ylabel('Curvature (1/m)')
+    ax_twin = axs[0,2].twinx()
+    ymin, ymax = axs[0,2].get_ylim()
+    ax_twin.set_ylim(ymin, ymax)
+    fig.canvas.draw()
+    ticks_raw = axs[0,2].get_yticks()
+    ticks_curv = [tick for tick in ticks_raw if ymin <= tick <= ymax]
+    radius_labels = []
+    for tick in ticks_curv:
+        if abs(tick) < 1e-5:
+            radius_labels.append(r"$\infty$")
+        else:
+            value = 1.0 / tick
+            radius_labels.append(f"{value:.2f}")
+    ax_twin.set_yticks(ticks_curv)
+    ax_twin.set_yticklabels(radius_labels)
+    ax_twin.set_ylabel('Radius of Curvature (m)')
+    
+    for result_set in result_sets:
+        t = result_set.time
+        axs[1,0].plot(t, result_set.motion_state.d2yaw_dt2,
+                      label=label_mapping[(result_set.single_track_on,
+                                           result_set.small_angles_on)])
+    axs[1,0].set_title('Yaw Acceleration')
+    axs[1,0].set_ylabel('Angular Acceleration (rad/s²)')
+    ax_twin = axs[1,0].twinx()
+    ax_twin.set_ylim(np.degrees(axs[1,0].get_ylim()))
+    ax_twin.set_ylabel('Angular Acceleration (deg/s²)')
+    
+    for result_set in result_sets:
+        t = result_set.time
+        axs[1,1].plot(t, result_set.motion_state.dside_slip_dt,
+                      label=label_mapping[(result_set.single_track_on,
+                                           result_set.small_angles_on)])
+    axs[1,1].set_title('Sideslip Velocity')
+    axs[1,1].set_ylabel('Angular Velocity (rad/s)')
+    ax_twin = axs[1,1].twinx()
+    ax_twin.set_ylim(np.degrees(axs[1,1].get_ylim()))
+    ax_twin.set_ylabel('Angular Velocity (deg/s)')
+
+    for result_set in result_sets:
+        acc_lat = (result_set.motion_state.velocity**2 / 
+                   result_set.motion_state.radius_of_turn)
+        t = result_set.time
+        axs[1,2].plot(t, acc_lat,
+                      label=label_mapping[(result_set.single_track_on,
+                                           result_set.small_angles_on)])
+    axs[1,2].set_title('Centripetal Acceleration')
+    axs[1,2].set_ylabel('Acceleration (m/s²)')
+    ax_twin = axs[1,2].twinx()
+    ax_lim = np.array(axs[1,2].get_ylim())/9.81
+    ax_twin.set_ylim(ax_lim)
+    ax_twin.set_ylabel('Acceleration (g)')
+
+    for result_set in result_sets:
+        t = result_set.time
+        axs[2,0].plot(t, result_set.wheel_angles.steer,
+                      label=label_mapping[(result_set.single_track_on,
+                                           result_set.small_angles_on)])
+    axs[2,0].set_title('Steer Angle')
+    axs[2,0].set_ylabel('Angle (rad)')
+    ax_twin = axs[2,0].twinx()
+    ax_twin.set_ylim(np.degrees(axs[2,0].get_ylim()))
+    ax_twin.set_ylabel('Angle (deg)')
+
+    for result_set in result_sets:
+        t = result_set.time
+        if result_set.single_track_on:
+            axs[2,1].plot(t, result_set.wheel_angles.alpha_f,
+                      label=(r"$\alpha_{f}$" + " (" + 
+                             label_mapping[(result_set.single_track_on,
+                                            result_set.small_angles_on)] + ")"))
+        elif not result_set.single_track_on:
+            axs[2,1].plot(t, result_set.wheel_angles.alpha_fl,
+                      label=(r"$\alpha_{fl}$" + " (" + 
+                             label_mapping[(result_set.single_track_on,
+                                            result_set.small_angles_on)] + ")"))
+            axs[2,1].plot(t, result_set.wheel_angles.alpha_fr,
+                      label=(r"$\alpha_{fr}$" + " (" + 
+                             label_mapping[(result_set.single_track_on,
+                                            result_set.small_angles_on)] + ")"))
+    axs[2,1].set_title('Front Axle Slip Angle')
+    axs[2,1].set_ylabel('Angle (rad)')
+    ax_twin = axs[2,1].twinx()
+    ax_twin.set_ylim(np.degrees(axs[2,1].get_ylim()))
+    ax_twin.set_ylabel('Angle (deg)')
+
+    for result_set in result_sets:
+        t = result_set.time
+        if result_set.single_track_on:
+            axs[2,2].plot(t, result_set.wheel_angles.alpha_f,
+                      label=(r"$\alpha_{b}$" + " (" + 
+                             label_mapping[(result_set.single_track_on,
+                                            result_set.small_angles_on)] + ")"))
+        elif not result_set.single_track_on:
+            axs[2,2].plot(t, result_set.wheel_angles.alpha_fl,
+                      label=(r"$\alpha_{bl}$" + " (" + 
+                             label_mapping[(result_set.single_track_on,
+                                            result_set.small_angles_on)] + ")"))
+            axs[2,2].plot(t, result_set.wheel_angles.alpha_fr,
+                      label=(r"$\alpha_{br}$" + " (" + 
+                             label_mapping[(result_set.single_track_on,
+                                            result_set.small_angles_on)] + ")"))
+    axs[2,2].set_title('Back Axle Slip Angle')
+    axs[2,2].set_ylabel('Angle (rad)')
+    ax_twin = axs[2,2].twinx()
+    ax_twin.set_ylim(np.degrees(axs[2,2].get_ylim()))
+    ax_twin.set_ylabel('Angle (deg)')
+
+    for ax in axs.flatten():
+        ax.grid(True)
+        ax.set_xlabel('Time (s)')
+        ax.legend(fontsize='small')
+
+    return fig, axs
+
 if __name__ == "__main__":
     car = Vehicle(mass_kg=1500,
                     cg_to_front_m = 2,
@@ -1794,9 +1953,9 @@ if __name__ == "__main__":
 
     car.yaw_inertia_kgm2 = car.yaw_inertia_estimation_kgm2()
     
-    tire_front = Tire(cornering_stiffness_NperRad=40000,
+    tire_front = Tire(cornering_stiffness_NperRad=20000,
                       relaxation_length_m=0.3)
-    tire_rear = Tire(cornering_stiffness_NperRad=20000,
+    tire_rear = Tire(cornering_stiffness_NperRad=25000,
                      relaxation_length_m=0.3)
 
     # input = {"radius": 12, "velocity": 20/3.6}
@@ -1818,11 +1977,21 @@ if __name__ == "__main__":
     
     input = {"tire_front": tire_front, "tire_rear": tire_rear,
              "time_end_s": 2.0, "time_step_s": 0.01, "velocity_m_s": 100/3.6,
-             "steering_wheel_input_f_of_t_rad": steer_step,
-             "single_track_on": False, "small_angles_on": True}
+             "steering_wheel_input_f_of_t_rad": steer_step}
+    
+    result_set_ST_SA = []
+    input_ST_SA = [(False,False), (False,True), (True,False), (True,True)]
+    for input_ST, input_SA in input_ST_SA:
+        input_complete = {**input,
+                          'single_track_on': input_ST,
+                          'small_angles_on': input_SA}
+        result_set_ST_SA.append(transient_maneuver(car, **input_complete))
+    
+    fig_ST_SA, axs_ST_SA = plot_result_comparison(result_set_ST_SA)
+    fig_ST_SA.show()
     
     result_set_array = transient_maneuver(car, **input)
-    
+
     fig_ts, axs_ts = plot_time_series(result_set_array)
     fig_ts.show()
 
@@ -1832,9 +2001,9 @@ if __name__ == "__main__":
     ax_vv.set_xlim(-8,8)
     ax_vv.set_ylim(-4,4)
     
-    visu_generate_video('/home/mgriebeler/Videos/lateral_dynamics/test.mp4',
-                        result_set_array=result_set_array,
-                        ax_xlim=(-8,8), ax_ylim=(-4,4), fig_size=(18,8))
+    # visu_generate_video('/home/mgriebeler/Videos/lateral_dynamics/test.mp4',
+    #                     result_set_array=result_set_array,
+    #                     ax_xlim=(-8,8), ax_ylim=(-4,4), fig_size=(18,8))
 
     # for i in range(len(result_set_array.wheel_angles.alpha_bl)):
     #     visu_vehicle_update(vis=vis, result_set=result_set_array[i])
