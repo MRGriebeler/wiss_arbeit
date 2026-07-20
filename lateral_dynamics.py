@@ -4,10 +4,12 @@ import numpy.typing as npt
 from scipy.optimize import root
 
 import matplotlib.pyplot as plt
+from matplotlib.artist import Artist
 from matplotlib.figure import Figure
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
 from matplotlib.quiver import Quiver
+from matplotlib.animation import FuncAnimation
 
 from dataclasses import dataclass, fields
 import functools
@@ -1360,7 +1362,7 @@ def visu_vehicle_initialize() -> tuple[Figure, Axes, Visualization]:
 
 def visu_vehicle_update(
         vis: Visualization,
-        result_set: ResultSet):
+        result_set: ResultSet) -> list[Artist]:
 
     #region - Parameters used in multiple following sections
 
@@ -1674,6 +1676,36 @@ def visu_vehicle_update(
 
     #endregion
 
+    return [vis.line_body,
+            *vis.line_wheels,
+            vis.quiver_vel_cg,
+            *vis.quiver_vel_wheels,
+            vis.line_path_cg,
+            *vis.line_path_wheels,
+            *vis.quiver_wheel_forces,
+            *vis.line_wheel_moments,
+            vis.quiver_force_result,
+            vis.quiver_force_res_norm,
+            vis.quiver_force_res_tang,
+            vis.line_moment_result]
+
+def visu_generate_video(filename: str, result_set_array: ResultSet,
+                        ax_xlim = None, ax_ylim = None, fig_size = None):
+    
+    fig, ax, vis = visu_vehicle_initialize()
+    fig.set_size_inches(fig_size)
+    ax.set_aspect('equal')
+    ax.set_xlim(ax_xlim)
+    ax.set_ylim(ax_ylim)
+    total_frames = len(result_set_array.time)
+
+    update = lambda result_set_scalar: visu_vehicle_update(vis,
+                                                           result_set_scalar)
+    
+    ani = FuncAnimation(fig, update, frames=result_set_array, blit=True)
+    
+    ani.save(filename=filename, writer='ffmpeg', fps=30, dpi=150)
+
 def plot_time_series(result_set: ResultSet) -> tuple[Figure, Axes]:
     fig, axs = plt.subplots(2, 3)
     fig.subplots_adjust(wspace=0.45)
@@ -1762,7 +1794,7 @@ if __name__ == "__main__":
 
     car.yaw_inertia_kgm2 = car.yaw_inertia_estimation_kgm2()
     
-    tire_front = Tire(cornering_stiffness_NperRad=30000,
+    tire_front = Tire(cornering_stiffness_NperRad=40000,
                       relaxation_length_m=0.3)
     tire_rear = Tire(cornering_stiffness_NperRad=20000,
                      relaxation_length_m=0.3)
@@ -1781,24 +1813,30 @@ if __name__ == "__main__":
     # fig.show()
     # print()
 
-    steer_step = create_step_function(t_total=5.0, dt=0.01, t_rise=0.10,
+    steer_step = create_step_function(t_total=2.0, dt=0.01, t_rise=0.10,
                                       t_start=0.01, height=np.radians(90))
     
     input = {"tire_front": tire_front, "tire_rear": tire_rear,
-             "time_end_s": 5.0, "time_step_s": 0.01, "velocity_m_s": 50/3.6,
+             "time_end_s": 2.0, "time_step_s": 0.01, "velocity_m_s": 100/3.6,
              "steering_wheel_input_f_of_t_rad": steer_step,
              "single_track_on": False, "small_angles_on": True}
     
-    result_set_f_of_t = transient_maneuver(car, **input)
+    result_set_array = transient_maneuver(car, **input)
     
-    fig_ts, axs_ts = plot_time_series(result_set_f_of_t)
+    fig_ts, axs_ts = plot_time_series(result_set_array)
     fig_ts.show()
 
     fig_vv, ax_vv, vis = visu_vehicle_initialize()
+    fig_vv.set_size_inches(18,8)
     ax_vv.set_aspect('equal')
     ax_vv.set_xlim(-8,8)
     ax_vv.set_ylim(-4,4)
-    for i in range(len(result_set_f_of_t.wheel_angles.alpha_bl)):
-        visu_vehicle_update(vis=vis, result_set=result_set_f_of_t[i])
-        fig_vv.show()
-        print()
+    
+    visu_generate_video('/home/mgriebeler/Videos/lateral_dynamics/test.mp4',
+                        result_set_array=result_set_array,
+                        ax_xlim=(-8,8), ax_ylim=(-4,4), fig_size=(18,8))
+
+    # for i in range(len(result_set_array.wheel_angles.alpha_bl)):
+    #     visu_vehicle_update(vis=vis, result_set=result_set_array[i])
+    #     fig_vv.show()
+    #     print()
