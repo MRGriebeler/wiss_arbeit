@@ -114,6 +114,8 @@ Additionally, the previous equality is also true if the Ackermann factor $k_{ack
 
 ### Static Tire Slip Angles
 
+The static tire slip angles are the geometrically defined slip angles that determine the steady state slip angle values.
+
 #### **Output** (Static Tire Slip Angles)
 
 If the **single-track model** option is selected:
@@ -233,22 +235,52 @@ The function returns a `WheelAngles` object, which is a container for the wheel 
 ```python
 @dataclass
 class WheelAngles:
-    steer_f: npt.ArrayLike
-    steer_fl: npt.ArrayLike
-    steer_fr: npt.ArrayLike
-    steer_bl: npt.ArrayLike
-    steer_br: npt.ArrayLike
-    alpha_f: npt.ArrayLike
-    alpha_fl: npt.ArrayLike
-    alpha_fr: npt.ArrayLike
-    alpha_b: npt.ArrayLike
-    alpha_bl: npt.ArrayLike
-    alpha_br: npt.ArrayLike
+    steer_f:    numpy.typing.ArrayLike
+    steer_fl:   numpy.typing.ArrayLike
+    steer_fr:   numpy.typing.ArrayLike
+    steer_bl:   numpy.typing.ArrayLike
+    steer_br:   numpy.typing.ArrayLike
+    alpha_f:    numpy.typing.ArrayLike
+    alpha_fl:   numpy.typing.ArrayLike
+    alpha_fr:   numpy.typing.ArrayLike
+    alpha_b:    numpy.typing.ArrayLike
+    alpha_bl:   numpy.typing.ArrayLike
+    alpha_br:   numpy.typing.ArrayLike
 ```
 
 ### Transient Tire Slip Angles
 
-asdasda
+The transient tire slip angles are the slip angle values between two slip angle steady states. During the process of slip angle change, the slip angle gradually progresses between the steady states based on the tire **relaxation length** parameter.
+
+#### **Output** (Transient Tire Slip Angles)
+
+- $\alpha_t$ : Transient slip angle
+
+#### **Input** (Transient Tire Slip Angles)
+
+- $\alpha$ : Current static slip angle
+- $v$ : Vehicle CG velocity magnitude
+- $\lambda$ : Tire relaxation length
+
+#### **Equations** (Transient Tire Slip Angles)
+
+The transient tire slip angle is modelled as a first order system:
+
+$$ \frac{d\alpha_t}{dt} = \frac{v}{\lambda}(\alpha_t - \alpha) $$
+
+#### **Implementation** (Transient Tire Slip Angles)
+
+The previously described equation is implemented via the function `calc_slip_ang_trans()`, which takes the following inputs:
+
+```python
+def calc_slip_ang_trans(
+        slip_ang_static_rad: float,
+        velocity_m_s: float,
+        relaxation_length_m: float,
+        slip_angle_previous_t_step: float,
+        time_delta_s: float
+        ) -> float:
+```
 
 ## Calculation of Wheel Forces
 
@@ -394,30 +426,30 @@ The function returns a `WheelForces` object, which is a container for the wheel 
 ```python
 @dataclass
 class WheelForces:
-    Fx_f: npt.ArrayLike
-    Fy_f: npt.ArrayLike
-    Fx_b: npt.ArrayLike
-    Fy_b: npt.ArrayLike
-    Fn_f: npt.ArrayLike
-    Ft_f: npt.ArrayLike
-    Fn_b: npt.ArrayLike
-    Ft_b: npt.ArrayLike
-    Fx_fl: npt.ArrayLike
-    Fy_fl: npt.ArrayLike
-    Fx_fr: npt.ArrayLike
-    Fy_fr: npt.ArrayLike
-    Fx_bl: npt.ArrayLike
-    Fy_bl: npt.ArrayLike
-    Fx_br: npt.ArrayLike
-    Fy_br: npt.ArrayLike
-    Fn_fl: npt.ArrayLike
-    Ft_fl: npt.ArrayLike
-    Fn_fr: npt.ArrayLike
-    Ft_fr: npt.ArrayLike
-    Fn_bl: npt.ArrayLike
-    Ft_bl: npt.ArrayLike
-    Fn_br: npt.ArrayLike
-    Ft_br: npt.ArrayLike
+    Fx_f:       numpy.typing.ArrayLike
+    Fy_f:       numpy.typing.ArrayLike
+    Fx_b:       numpy.typing.ArrayLike
+    Fy_b:       numpy.typing.ArrayLike
+    Fn_f:       numpy.typing.ArrayLike
+    Ft_f:       numpy.typing.ArrayLike
+    Fn_b:       numpy.typing.ArrayLike
+    Ft_b:       numpy.typing.ArrayLike
+    Fx_fl:      numpy.typing.ArrayLike
+    Fy_fl:      numpy.typing.ArrayLike
+    Fx_fr:      numpy.typing.ArrayLike
+    Fy_fr:      numpy.typing.ArrayLike
+    Fx_bl:      numpy.typing.ArrayLike
+    Fy_bl:      numpy.typing.ArrayLike
+    Fx_br:      numpy.typing.ArrayLike
+    Fy_br:      numpy.typing.ArrayLike
+    Fn_fl:      numpy.typing.ArrayLike
+    Ft_fl:      numpy.typing.ArrayLike
+    Fn_fr:      numpy.typing.ArrayLike
+    Ft_fr:      numpy.typing.ArrayLike
+    Fn_bl:      numpy.typing.ArrayLike
+    Ft_bl:      numpy.typing.ArrayLike
+    Fn_br:      numpy.typing.ArrayLike
+    Ft_br:      numpy.typing.ArrayLike
 ```
 
 ## Calculation of Wheel Moments
@@ -479,12 +511,252 @@ The function returns a `WheelMoments` object, which is a container for the wheel
 ```python
 @dataclass
 class WheelMoments:
-    Myaw_f: npt.ArrayLike
-    Myaw_fl: npt.ArrayLike
-    Myaw_fr: npt.ArrayLike
-    Myaw_b: npt.ArrayLike
-    Myaw_bl: npt.ArrayLike
-    Myaw_br: npt.ArrayLike
+    Myaw_f:         numpy.typing.ArrayLike
+    Myaw_fl:        numpy.typing.ArrayLike
+    Myaw_fr:        numpy.typing.ArrayLike
+    Myaw_b:         numpy.typing.ArrayLike
+    Myaw_bl:        numpy.typing.ArrayLike
+    Myaw_br:        numpy.typing.ArrayLike
+```
+
+## Vehicle Motion State
+
+The container object `MotionState` groups the necessary information to characterize the instantaneous motion state of a vehicle. The attributes of `MotionState` are:
+
+- $R$ : Instantaneous turning radius described by the vehicle CG
+- $\beta$ : Sideslip angle
+- $\delta_{sw}$ : Steering wheel angle - **not** steering angle at the wheel ($\delta$)
+- $v$ : Velocity magnitude of the vehicle's CG
+- $\dot\psi$ : Yaw angular velocity
+- $\ddot\psi$ : Yaw angular acceleration
+- $\dot\beta$ : Sideslip angular velocity
+- $F_{cent}$ : Total centripetal force generated by the vehicle
+- $M_z$ : Yaw moment generated by the vehicle
+
+The implementation is shown next
+
+```python
+@dataclass
+class MotionState:
+    radius_of_turn:         numpy.typing.ArrayLike
+    side_slip:              numpy.typing.ArrayLike
+    steering_wheel_input:   numpy.typing.ArrayLike
+    velocity:               numpy.typing.ArrayLike
+    dyaw_dt:                numpy.typing.ArrayLike
+    d2yaw_dt2:              numpy.typing.ArrayLike
+    dside_slip_dt:          numpy.typing.ArrayLike
+    Fcent:                  numpy.typing.ArrayLike
+    Myaw:                   numpy.typing.ArrayLike
+```
+
+## Simulation Result Set
+
+The container `ResultSet` groups the information provided as result of a simulation. The attributes of `ResultSet` are:
+
+- `Vehicle` : container with [vehicle properties](#vehicle-properties)
+- `Tire` Front Axle: container with [tire properties](#tire-properties)
+- `Tire` Back Axle: container with [tire properties](#tire-properties)
+- `MotionState`: container with [vehicle motion state](#vehicle-motion-state)
+- `WheelAngles`: container with [wheel angles](#calculation-of-wheel-angles)
+- `WheelForces`: container with [wheel forces](#calculation-of-wheel-forces)
+- `WheelMoments`: container with [wheel moments](#calculation-of-wheel-moments)
+- **Time**: array with the calculated discrete simulation time steps
+- **Single-Track-On**: boolean parameter for double- or single-track-model
+- **Small-Angles-On**: boolean parameter for small angle assumption
+
+The implementation is shown next
+
+```python
+@dataclass
+class ResultSet:
+    car: Vehicle
+    tire_front: Tire
+    tire_rear: Tire
+    motion_state: MotionState
+    wheel_angles: WheelAngles
+    wheel_forces: WheelForces
+    wheel_moments: WheelMoments
+    time: npt.ArrayLike
+    single_track_on: bool
+    small_angles_on: bool
 ```
 
 ## Steady State Cornering
+
+### Description (Steady State Cornering)
+
+The simplest lateral dynamics maneuver is the **steady state cornering**. The vehicle **motion state** during a specified steady state cornering maneuver must **simultaneously** satisfy the two following conditions:
+
+$$\begin{cases}
+
+F_{cent} = mv²/R \\
+M_z = 0
+
+\end{cases}$$
+
+In the previously stated equations, $F_{cent}$ and $M_z$ are calculated based on the [tire forces](#calculation-of-wheel-forces) and [moments](#calculation-of-wheel-moments) as follows:
+
+$$ F_{cent} = F_{n,f} + F_{n,b} $$
+
+$$ M_z = M_{z,f} + M_{z,b} $$
+
+Due to the steady state condition, some of the parameter of the `MotionState` [container](#vehicle-motion-state) are zero:
+
+- $\ddot\psi = 0$ (Yaw acceleration)
+- $\dot\beta = 0$ (Sideslip angular velocity)
+- $M_z = 0$ (Yaw moment)
+
+Additionally, $F_{cent}$ and $\dot\psi$ can be derived from the remaining `MotionState` parameters and vehicle:
+
+$$ F_{cent} = mv²/R $$
+
+$$ \dot\psi = v/R $$
+
+Four `MotionState` parameters remain:
+
+- $R$ : Instantaneous turning radius described by the vehicle CG
+- $\beta$ : Sideslip angle
+- $\delta_{sw}$ : Steering wheel angle - **not** steering angle at the wheel ($\delta$)
+- $v$ : Velocity magnitude of the vehicle's CG
+
+The two conditions $(F_{cent} = mv^2/R$ and $Mz=0)$ can be used to determine two of the four parameters. As such, the other two parameters must be informed for the system of equations to be solvable.
+
+### Output (Steady State Cornering)
+
+The **Steady State Cornering** simulation returns a `ResultSet` [container](#simulation-result-set).
+
+### Input (Steady State Cornering)
+
+- `Vehicle` : container with [vehicle properties](#vehicle-properties)
+- `Tire` Front Axle: container with [tire properties](#tire-properties)
+- `Tire` Back Axle: container with [tire properties](#tire-properties)
+- **Input**: Dictionary `{'state1': value1, 'state2': value2}` informing two of the following states:
+    - `"radius_of_turn_m"`
+    - `"side_slip_rad"`
+    - `"steering_wheel_input_rad"`
+    - `"velocity_m_s"`
+- **Single-Track-On**: boolean parameter for double- or single-track-model
+- **Small-Angles-On**: boolean parameter for small angle assumption
+
+### Implementation (Steady State Cornering)
+
+The previously described steady state cornering simulation is implemented as follows
+
+```python
+def steady_state_cornering(
+        car: Vehicle,
+        *,
+        tire_front: Tire,
+        tire_rear: Tire,
+        input: dict,
+        single_track_on: bool = False,
+        small_angles_on: bool = False):
+```
+
+Inside the `steady_state_cornering()` function, the mathematical problem to be solved is defined used the `motion_equations()` function:
+
+```python
+def motion_equations(car: Vehicle,
+                     *,
+                     tire_front: Tire,
+                     tire_rear: Tire,
+                     steering_wheel_input_rad: float,
+                     side_slip_rad: float,
+                     velocity_m_s: float,
+                     radius_of_turn_m: float,
+                     single_track_on: bool,
+                     small_angles_on: bool):
+
+    wheel_angles_rad = calc_wheel_angles(...)
+
+    wheel_forces_N = calc_wheel_forces(...)
+
+    force_centripetal_N = wheel_forces_N.Fn_f + wheel_forces_N.Fn_b
+
+    force_centrifugal_N = car.mass_kg*velocity_m_s**2/radius_of_turn_m
+
+    force_diff_N = force_centripetal_N + force_centrifugal_N
+
+    wheel_moments_Nm = calc_wheel_moments(...)
+
+    moment_yaw_Nm = wheel_moments_Nm.Myaw_f + wheel_moments_Nm.Myaw_b
+
+    return (force_diff_N, moment_yaw_Nm)
+```
+
+The `motion_equations()` function is then passed to `scipy.optmize.root()` to solve the non-linear system of equations. The initial guess for the two unknown states are calculated based on the equations for the single-track-model with small-angle assumption. This calculation uses the following parameters:
+
+- $m$ : Vehicle mass
+- $l_f$ : Distance from front-axle to CG
+- $l_b$ : Distance from back-axle to CG
+- $c_f$ : Front tire cornering stiffness
+- $c_b$ : Back tire cornering stiffness
+
+Defining:
+
+$$ m_f = m\left( \frac{l_b}{lf+lb}\right) $$
+
+$$ m_b = m\left( \frac{l_f}{lf+lb}\right) $$
+
+The steering gradient $(k_\delta)$ and sideslip gradient $(k_\beta)$ are:
+
+$$ k_\delta = \frac{m_f}{c_f} - \frac{m_b}{c_b} $$
+
+$$ k_\beta = - \frac{m_b}{c_b} $$
+
+The initial guesses for the four motion states are:
+
+- If $(R, \beta)$ are informed:
+    $$ \delta_0 = \frac{l_f+l_b}{R} + \frac{k_\delta}{k_\beta}(\beta - \frac{l_b}{R}) $$
+    $$ v_0 = \sqrt{\frac{R\beta - l_b}{k_\beta}} $$
+
+- If $(R, \delta)$ are informed:
+    $$ \beta_0 = \frac{l_b}{R} + \frac{k_\beta}{k_\delta}(\delta - \frac{l_f + l_b}{R}) $$
+    $$ v_0 = \sqrt{\frac{R\delta - (l_f+l_b)}{k_\delta}} $$
+
+- If $(R, v)$ are informed:
+    $$ \delta_0 = \frac{l_f+l_b}{R} + k_\delta \frac{v^2}{R} $$
+    $$ \beta_0 = \frac{l_b}{R} + k_\beta\frac{v^2}{R} $$
+
+- If $(\beta, \delta)$ are informed:
+
+    $$ R_0 = \frac{l_f+l_b}{\delta} + k_\delta \frac{v^2}{\delta} $$
+    $$ v_0 = \sqrt{\frac{\delta l_b - \beta (l_f+l_b)}{\beta k_\delta - \delta k_\beta}} $$
+
+- If $(\beta, v)$ are informed:
+    $$ R_0 = \frac{lb}{\beta} + k_\beta\frac{v^2}{\beta} $$
+    $$ \delta_0 = \beta\frac{(l_f+l_b) + k_\delta v^2}{l_b + k_\beta v^2} $$
+
+- If $(\delta, v)$ are informed:
+    $$ R_0 = \frac{l_f+l_b}{\delta} + k_\delta \frac{v^2}{\delta} $$
+    $$ \beta_0 = \delta \frac{l_b + k_\beta v^2}{(l_f+l_b) + k_\delta v^2} $$
+
+## Transient Maneuver
+
+### Description (Transient Maneuver)
+
+The **transient maneuver** allows for the simulation of a time-dependent steer input. During the simulation, a system of two coupled differential equations is solved. These are:
+
+$$ \dot\beta = -\frac{F_{cent}}{mv} - \dot\psi $$
+
+$$ \ddot\psi = \frac{M_z}{J_z} $$
+
+where $J_z$ is the vehicle's yaw inertia.
+
+Differently than the steady [state cornering simulation](#steady-state-cornering), the transient maneuver simulation allows for the motion state of the vehicle to be specified uniquely as steering wheel angle $(\delta_{sw}(t))$ and CG-velocity $(v)$. The steering wheel angle can depend on time, but the velocity is constant.
+
+### Output (Transient Maneuver)
+
+The **transient maneuver** simulation returns a `ResultSet` [container](#simulation-result-set).
+
+### Input (Transient Maneuver)
+
+- `Vehicle` : container with [vehicle properties](#vehicle-properties)
+- `Tire` Front Axle: container with [tire properties](#tire-properties)
+- `Tire` Back Axle: container with [tire properties](#tire-properties)
+- $t_{end}$ : Simulation end time
+- $\Delta t$ : Simulation time step
+- $v$ : CG-Velocity magnitude (constant)
+- $\delta_{sw}(t)$ : Steering wheel angle as time array
+- **Single-Track-On**: boolean parameter for double- or single-track-model
+- **Small-Angles-On**: boolean parameter for small angle assumption
