@@ -46,13 +46,15 @@ class Vehicle:
 @dataclass
 class Tire:
     cornering_stiffness_NperRad: float = 30000.0
-    relaxation_length_m: float = 5.0
+    relaxation_length_m: float = 0.3
 
 @dataclass
 class WheelAngles:
-    steer: npt.ArrayLike
+    steer_f: npt.ArrayLike
     steer_fl: npt.ArrayLike
     steer_fr: npt.ArrayLike
+    steer_bl: npt.ArrayLike
+    steer_br: npt.ArrayLike
     alpha_f: npt.ArrayLike
     alpha_fl: npt.ArrayLike
     alpha_fr: npt.ArrayLike
@@ -93,40 +95,45 @@ def calc_wheel_angles(
     '''
     #region - Calculate steering angle at each individual wheel    
     
-    steer = \
-        steering_wheel_input_rad/car.steer_ratio_before_over_after_rack
+    s_ratio = car.steer_ratio_before_over_after_rack
+    steer_f = steering_wheel_input_rad/s_ratio
+    steer_b = 0
     ack = car.ackermann_factor
     wf = car.track_front_m
     lf = car.cg_to_front_m
     lb = car.cg_to_back_m
-    toe_f = np.deg2rad(car.toe_out_front_deg)
+    toe_out_f = np.deg2rad(car.toe_out_front_deg)
+    toe_out_b = np.deg2rad(car.toe_out_back_deg)
 
     steer_fl_rad = np.nan
     steer_fr_rad = np.nan
+    steer_bl_rad = np.nan
+    steer_br_rad = np.nan
     
     if not single_track_on:
-        if small_angles_on:
-            steer_fl_rad = \
-                steer/(1 - ack*(wf/2)*steer/(lf+lb)) + toe_f*np.sign(steer)
+        steer_bl_rad = + toe_out_b
+        steer_br_rad = - toe_out_b
 
-            steer_fr_rad = \
-                steer/(1 + ack*(wf/2)*steer/(lf+lb)) - toe_f*np.sign(steer)
+        if small_angles_on:
+            steer_fl_rad = (
+                steer_f/(1 - ack*(wf/2)*steer_f/(lf+lb)) + toe_out_f)
+
+            steer_fr_rad = (
+                steer_f/(1 + ack*(wf/2)*steer_f/(lf+lb)) - toe_out_f)
         
         elif not small_angles_on:
-            steer_fl_rad = \
-                np.atan2(np.tan(steer), 1 - ack*(wf/2)*np.tan(steer)/(lf+lb)) \
-                    + toe_f*np.sign(steer)
+            y = np.tan(steer_f)
+            x_fl = 1 - ack*(wf/2)*np.tan(steer_f)/(lf+lb)
+            x_fr = 1 + ack*(wf/2)*np.tan(steer_f)/(lf+lb)
 
-            steer_fr_rad = \
-                np.atan2(np.tan(steer), 1 + ack*(wf/2)*np.tan(steer)/(lf+lb)) \
-                    - toe_f*np.sign(steer)
+            steer_fl_rad = np.atan2(y,x_fl) + toe_out_f
+            steer_fr_rad = np.atan2(y,x_fr) - toe_out_f
     
     #endregion
 
     #region - Calculate tire slip angles
     
     wb = car.track_back_m
-    toe_b = np.deg2rad(car.toe_out_back_deg)
     beta = side_slip_rad
     vel = velocity_m_s
     dyaw_dt = dyaw_dt_rad_s            
@@ -140,61 +147,60 @@ def calc_wheel_angles(
     
     if small_angles_on:
         if single_track_on:
-            alpha_f_rad = beta + dyaw_dt*lf/vel - steer
+            alpha_f_rad = beta + dyaw_dt*lf/vel - steer_f
             alpha_b_rad = beta - dyaw_dt*lb/vel
         
         elif not single_track_on:
             alpha_fl_rad = ((beta + dyaw_dt*lf/vel)/(1 - (dyaw_dt/vel)*wf/2)
-                            - steer_fl_rad + toe_f*np.sign(steer))
+                            - steer_fl_rad)
                 
             alpha_fr_rad = ((beta + dyaw_dt*lf/vel)/(1 + (dyaw_dt/vel)*wf/2)
-                            - steer_fr_rad - toe_f*np.sign(steer))
+                            - steer_fr_rad)
             
             alpha_bl_rad = ((beta - dyaw_dt*lb/vel)/(1 - (dyaw_dt/vel)*wb/2) 
-                            + toe_b*np.sign(steer))
+                            - steer_bl_rad)
                 
             alpha_br_rad = ((beta - dyaw_dt*lb/vel)/(1 + (dyaw_dt/vel)*wb/2)
-                            - toe_b*np.sign(steer))
+                            - steer_br_rad)
         
     elif not small_angles_on:
         if single_track_on:
             alpha_f_rad = np.atan2(np.sin(beta) + dyaw_dt*lf/vel, 
-                                    np.cos(beta)) - steer
+                                    np.cos(beta)) - steer_f
             
             alpha_b_rad = np.atan2(np.sin(beta) - dyaw_dt*lf/vel, 
-                                    np.cos(beta))
+                                    np.cos(beta) - steer_b)
         
         elif not single_track_on:
             alpha_fl_rad = \
                 np.atan2(np.sin(beta) + dyaw_dt*lf/vel, np.cos(beta) - 
-                    (dyaw_dt/vel)*wf/2) - steer_fl_rad + toe_f*np.sign(steer)
+                    (dyaw_dt/vel)*wf/2) - steer_fl_rad
                 
             alpha_fr_rad = \
                 np.atan2(np.sin(beta) + dyaw_dt*lf/vel, np.cos(beta) + 
-                    (dyaw_dt/vel)*wf/2) - steer_fr_rad - toe_f*np.sign(steer)
+                    (dyaw_dt/vel)*wf/2) - steer_fr_rad
             
             alpha_bl_rad = \
                 np.atan2(np.sin(beta) - dyaw_dt*lb/vel, np.cos(beta) - 
-                    (dyaw_dt/vel)*wb/2) + toe_b*np.sign(steer)
+                    (dyaw_dt/vel)*wb/2) - steer_bl_rad
                 
             alpha_br_rad = \
                 np.atan2(np.sin(beta) - dyaw_dt*lb/vel, np.cos(beta) + 
-                    (dyaw_dt/vel)*wb/2) - toe_b*np.sign(steer)
+                    (dyaw_dt/vel)*wb/2) - steer_br_rad
     
     #endregion
 
-    #region - Define output
-    output_rad = WheelAngles(steer=steer,
+    output_rad = WheelAngles(steer_f=steer_f,
                              steer_fl=steer_fl_rad,
                              steer_fr=steer_fr_rad,
+                             steer_bl=steer_bl_rad,
+                             steer_br=steer_br_rad,
                              alpha_f=alpha_f_rad,
                              alpha_fl=alpha_fl_rad,
                              alpha_fr=alpha_fr_rad,
                              alpha_b=alpha_b_rad,
                              alpha_bl=alpha_bl_rad,
                              alpha_br=alpha_br_rad)
-    
-    #endregion
 
     return output_rad
 
@@ -236,7 +242,6 @@ class WheelForces:
         return self.__class__(**sliced_data)
 
 def calc_wheel_forces(
-        car: Vehicle,
         *,
         tire_front: Tire,
         tire_rear: Tire,
@@ -254,8 +259,6 @@ def calc_wheel_forces(
 
     c_f = tire_front.cornering_stiffness_NperRad
     c_b = tire_rear.cornering_stiffness_NperRad
-    toe_f = np.radians(car.toe_out_front_deg)
-    toe_b = np.radians(car.toe_out_back_deg)
 
     Fx_fl_N = np.nan
     Fy_fl_N = np.nan
@@ -267,53 +270,57 @@ def calc_wheel_forces(
     Fy_br_N = np.nan
 
     if single_track_on:
-        d = wheel_angles.steer
+        d_f = wheel_angles.steer_f
         a_f = wheel_angles.alpha_f
         a_b = wheel_angles.alpha_b
 
         Fx_b_N = 0
         Fy_b_N = -2*c_b*a_b
+
         if small_angles_on:
             Fx_f_N = 0
             Fy_f_N = -2*c_f*a_f
         
         elif not small_angles_on:
-            Fx_f_N = +2*c_f*(a_f*np.sin(d))
-            Fy_f_N = -2*c_f*(a_f*np.cos(d))
+            Fx_f_N = +2*c_f*(a_f*np.sin(d_f))
+            Fy_f_N = -2*c_f*(a_f*np.cos(d_f))
 
     elif not single_track_on:
         d_fl = wheel_angles.steer_fl
         d_fr = wheel_angles.steer_fr
+        d_bl = wheel_angles.steer_bl
+        d_br = wheel_angles.steer_br
+
         a_fl = wheel_angles.alpha_fl
         a_fr = wheel_angles.alpha_fr
         a_bl = wheel_angles.alpha_bl
         a_br = wheel_angles.alpha_br
 
         if small_angles_on:
-            Fx_fl_N = +c_f*a_fl*(d_fl + toe_f)
+            Fx_fl_N = +c_f*a_fl*(d_fl)
             Fy_fl_N = -c_f*a_fl
 
-            Fx_fr_N = +c_f*a_fr*(d_fl - toe_f)
+            Fx_fr_N = +c_f*a_fr*(d_fr)
             Fy_fr_N = -c_f*a_fr
 
-            Fx_bl_N = +c_b*a_bl*(+toe_b)
+            Fx_bl_N = +c_b*a_bl*(d_bl)
             Fy_bl_N = -c_b*a_bl
 
-            Fx_br_N = +c_b*a_br*(-toe_b)
+            Fx_br_N = +c_b*a_br*(d_br)
             Fy_br_N = -c_b*a_br
 
         elif not small_angles_on:
-            Fx_fl_N = +c_f*(a_fl*np.sin(d_fl + toe_f))
-            Fy_fl_N = -c_f*(a_fl*np.cos(d_fl + toe_f))
+            Fx_fl_N = +c_f*a_fl*np.sin(d_fl)
+            Fy_fl_N = -c_f*a_fl*np.cos(d_fl)
 
-            Fx_fr_N = +c_f*(a_fr*np.sin(d_fl - toe_f))
-            Fy_fr_N = -c_f*(a_fr*np.cos(d_fl - toe_f))
+            Fx_fr_N = +c_f*a_fr*np.sin(d_fr)
+            Fy_fr_N = -c_f*a_fr*np.cos(d_fr)
 
-            Fx_bl_N = +c_b*a_bl*np.sin(+toe_b)
-            Fy_bl_N = -c_b*a_bl*np.cos(+toe_b)
+            Fx_bl_N = +c_b*a_bl*np.sin(d_bl)
+            Fy_bl_N = -c_b*a_bl*np.cos(d_bl)
 
-            Fx_br_N = +c_b*a_br*np.sin(-toe_b)
-            Fy_br_N = -c_b*a_br*np.cos(-toe_b)
+            Fx_br_N = +c_b*a_br*np.sin(d_br)
+            Fy_br_N = -c_b*a_br*np.cos(d_br)
         
         Fx_f_N = Fx_fl_N + Fx_fr_N
         Fy_f_N = Fy_fl_N + Fy_fr_N
@@ -341,9 +348,9 @@ def calc_wheel_forces(
             Ft_b_N = 0
 
         elif not small_angles_on:
-            Fn_f_N = 2*c_f*a_f*np.cos(side_slip_rad - d)
+            Fn_f_N = 2*c_f*a_f*np.cos(side_slip_rad - d_f)
             Fn_b_N = 2*c_b*a_b*np.cos(side_slip_rad)
-            Ft_f_N = 2*c_f*a_f*(-np.sin(side_slip_rad - d))
+            Ft_f_N = 2*c_f*a_f*(-np.sin(side_slip_rad - d_f))
             Ft_b_N = 2*c_b*a_b*(-np.sin(side_slip_rad))
 
     elif not single_track_on:
@@ -355,19 +362,19 @@ def calc_wheel_forces(
             
             Ft_fl_N = c_f*a_fl*(-(side_slip_rad - d_fl))
             Ft_fr_N = c_f*a_fr*(-(side_slip_rad - d_fr))
-            Ft_bl_N = c_b*a_bl*(-(side_slip_rad))
-            Ft_br_N = c_b*a_br*(-(side_slip_rad))
+            Ft_bl_N = c_b*a_bl*(-(side_slip_rad - d_bl))
+            Ft_br_N = c_b*a_br*(-(side_slip_rad - d_br))
 
         elif not small_angles_on:
             Fn_fl_N = c_f*a_fl*np.cos(side_slip_rad - d_fl)
             Fn_fr_N = c_f*a_fr*np.cos(side_slip_rad - d_fr)
-            Fn_bl_N = c_b*a_bl*np.cos(side_slip_rad)
-            Fn_br_N = c_b*a_br*np.cos(side_slip_rad)
+            Fn_bl_N = c_b*a_bl*np.cos(side_slip_rad - d_bl)
+            Fn_br_N = c_b*a_br*np.cos(side_slip_rad - d_br)
             
             Ft_fl_N = c_f*a_fl*(-np.sin(side_slip_rad - d_fl))
             Ft_fr_N = c_f*a_fr*(-np.sin(side_slip_rad - d_fr))
-            Ft_bl_N = c_b*a_bl*(-np.sin(side_slip_rad))
-            Ft_br_N = c_b*a_br*(-np.sin(side_slip_rad))
+            Ft_bl_N = c_b*a_bl*(-np.sin(side_slip_rad - d_bl))
+            Ft_br_N = c_b*a_br*(-np.sin(side_slip_rad - d_br))
 
         Fn_f_N = Fn_fl_N + Fn_fr_N
         Fn_b_N = Fn_bl_N + Fn_br_N
@@ -376,14 +383,13 @@ def calc_wheel_forces(
 
     #endregion
 
-    #region - Define output
     output_N = WheelForces(Fx_f=Fx_f_N, Fy_f=Fy_f_N,
                            Fx_b=Fx_b_N, Fy_b=Fy_b_N,
                            Fn_f=Fn_f_N, Ft_f=Ft_f_N,
                            Fn_b=Fn_b_N, Ft_b=Ft_b_N,
                            Fx_fl=Fx_fl_N, Fy_fl=Fy_fl_N,
-                           Fx_fr=Fx_fr_N, Fy_fr=Fy_fl_N,
-                           Fx_bl=Fx_bl_N, Fy_bl=Fy_br_N,
+                           Fx_fr=Fx_fr_N, Fy_fr=Fy_fr_N,
+                           Fx_bl=Fx_bl_N, Fy_bl=Fy_bl_N,
                            Fx_br=Fx_br_N, Fy_br=Fy_br_N,
                            Fn_fl=Fn_fl_N, Ft_fl=Ft_fl_N,
                            Fn_fr=Fn_fr_N, Ft_fr=Ft_fr_N,
@@ -417,7 +423,7 @@ def calc_wheel_moments(
         car: Vehicle,
         wheel_forces: WheelForces,
         single_track_on: bool = False
-        ):
+        ) -> WheelMoments:
     '''
     Calculates the yaw moment generated by each individual wheel
     '''
@@ -448,14 +454,10 @@ def calc_wheel_moments(
         Myaw_b_Nm = Myaw_bl_Nm + Myaw_br_Nm
 
     #endregion
-    
-    #region - Define output
 
     output_Nm = WheelMoments(Myaw_f=Myaw_f_Nm, Myaw_b=Myaw_b_Nm,
                              Myaw_fl=Myaw_fl_Nm, Myaw_fr=Myaw_fr_Nm,
                              Myaw_bl=Myaw_bl_Nm, Myaw_br=Myaw_br_Nm)
-    
-    #endregion
 
     return output_Nm
 
@@ -605,7 +607,6 @@ def steady_state_cornering(
             small_angles_on=small_angles_on)
         
         wheel_forces_N = calc_wheel_forces(
-            car,
             tire_front=tire_front,
             tire_rear=tire_rear,
             wheel_angles=wheel_angles_rad,
@@ -861,7 +862,6 @@ def steady_state_cornering(
         small_angles_on=small_angles_on)
     
     wheel_forces = calc_wheel_forces(
-        car,
         tire_front=tire_front,
         tire_rear=tire_rear,
         wheel_angles=wheel_angles,
@@ -971,9 +971,11 @@ def transient_maneuver(
     d2yaw_dt2[0] = initial_conditions_SI.d2yaw_dt2_0
     radius_of_turn[0] = velocity_m_s / (dyaw_dt[0] + side_slip[0])
 
-    steer = np.full(len(time), np.nan)
+    steer_f = np.full(len(time), np.nan)
     steer_fl = np.full(len(time), np.nan)
     steer_fr = np.full(len(time), np.nan)
+    steer_bl = np.full(len(time), np.nan)
+    steer_br = np.full(len(time), np.nan)
 
     alpha_static_f = np.full(len(time), np.nan)
     alpha_static_b = np.full(len(time), np.nan)
@@ -1042,9 +1044,11 @@ def transient_maneuver(
             single_track_on=single_track_on,
             small_angles_on=small_angles_on)
         
-        steer[t_idx] = wheel_angles_static.steer
+        steer_f[t_idx] = wheel_angles_static.steer_f
         steer_fl[t_idx] = wheel_angles_static.steer_fl
         steer_fr[t_idx] = wheel_angles_static.steer_fr
+        steer_bl[t_idx] = wheel_angles_static.steer_bl
+        steer_br[t_idx] = wheel_angles_static.steer_br
         
         alpha_static_f[t_idx] = wheel_angles_static.alpha_f
         alpha_static_b[t_idx] = wheel_angles_static.alpha_b
@@ -1106,9 +1110,11 @@ def transient_maneuver(
                 time_step_s)
         
         wheel_angles_trans = WheelAngles(
-            steer=wheel_angles_static.steer,
+            steer_f=wheel_angles_static.steer_f,
             steer_fl=wheel_angles_static.steer_fl,
             steer_fr=wheel_angles_static.steer_fr,
+            steer_bl=wheel_angles_static.steer_bl,
+            steer_br=wheel_angles_static.steer_br,
             alpha_f=alpha_trans_f[t_idx],
             alpha_fl=alpha_trans_fl[t_idx],
             alpha_fr=alpha_trans_fr[t_idx],
@@ -1116,8 +1122,7 @@ def transient_maneuver(
             alpha_bl=alpha_trans_bl[t_idx],
             alpha_br=alpha_trans_br[t_idx])
         
-        wheel_forces = calc_wheel_forces(car,
-                                         tire_front=tire_front,
+        wheel_forces = calc_wheel_forces(tire_front=tire_front,
                                          tire_rear=tire_rear,
                                          wheel_angles=wheel_angles_trans,
                                          side_slip_rad=side_slip[t_idx],
@@ -1195,9 +1200,11 @@ def transient_maneuver(
         Myaw=Myaw)
     
     wheel_angles = WheelAngles(
-        steer=steer,
+        steer_f=steer_f,
         steer_fl=steer_fl,
         steer_fr=steer_fr,
+        steer_bl=steer_bl,
+        steer_br=steer_br,
         alpha_f=alpha_trans_f,
         alpha_fl=alpha_trans_fl,
         alpha_fr=alpha_trans_fr,
@@ -1417,21 +1424,17 @@ def visu_vehicle_update(
 
     if result_set.single_track_on:
         num_wheels = 2
-        steer = result_set.wheel_angles.steer
+        steer = result_set.wheel_angles.steer_f
         wheel_angle_rad = [steer, 0]
     
     elif not result_set.single_track_on:
         num_wheels = 4
         st_fl = result_set.wheel_angles.steer_fl
         st_fr = result_set.wheel_angles.steer_fr
-        toe_f = np.deg2rad(car.toe_out_front_deg)
-        toe_b = np.deg2rad(car.toe_out_back_deg)
+        st_bl = result_set.wheel_angles.steer_bl
+        st_br = result_set.wheel_angles.steer_br
 
-        wheel_angle_rad = [
-            st_fl - np.sign(st_fl)*toe_f,
-            st_fr + np.sign(st_fr)*toe_f,
-            +np.sign(st_fl)*toe_b,
-            -np.sign(st_fr)*toe_b]
+        wheel_angle_rad = [st_fl, st_fr, st_bl, st_br]
     
     for i, x_shift, y_shift, wheel_ang in zip(range(num_wheels),
                                               wheel_pos_x_m,
@@ -1879,7 +1882,7 @@ def plot_result_comparison(result_sets: list[ResultSet]) -> tuple[Figure, Axes]:
 
     for result_set in result_sets:
         t = result_set.time
-        axs[2,0].plot(t, result_set.wheel_angles.steer,
+        axs[2,0].plot(t, result_set.wheel_angles.steer_f,
                       label=label_mapping[(result_set.single_track_on,
                                            result_set.small_angles_on)])
     axs[2,0].set_title('Steer Angle')
@@ -1944,7 +1947,7 @@ if __name__ == "__main__":
                     cg_to_front_m = 2,
                     cg_to_back_m = 2,
                     toe_out_front_deg = -0.5,
-                    toe_out_back_deg = 0.0,
+                    toe_out_back_deg = -0.5,
                     track_front_m=1.8,
                     track_back_m=2,
                     ackermann_factor=1,
@@ -1958,7 +1961,7 @@ if __name__ == "__main__":
     tire_rear = Tire(cornering_stiffness_NperRad=25000,
                      relaxation_length_m=0.3)
 
-    # input = {"radius": 12, "velocity": 20/3.6}
+    # input = {"radius": 20, "velocity": 20/3.6}
     # result_set,_ = steady_state_cornering(car,
     #                        tire_front=tire_front,
     #                        tire_rear=tire_rear,
