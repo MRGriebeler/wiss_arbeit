@@ -69,7 +69,7 @@ This project uses Python to solve the movement equations governing lateral movem
 
 ### **Illustration** (Reference Frames)
 
-![Illustration of the used reference frames](./images/reference_frames.png)
+<img src="./images/reference_frames.png" alt="Illustration of the used reference frames">
 
 ### Angle Measurement
 
@@ -82,6 +82,8 @@ The vehicle reference frame has its **origin** at the vehicle **center of gravit
 ### CG-Velocity Reference Frame $(ê_n, ê_t)$
 
 The CG-velocity reference frame is a **normal-tangential** reference with respect to the **CG-velocity**. It also has its **origin** at the vehicle **CG**. The orientation difference between the two reference frames is the vehicle **sideslip angle** ($\beta$), as it can be seen in the [illustration](#illustration-reference-frames).
+
+<div class="page"></div>
 
 ## Model Inputs
 
@@ -109,7 +111,25 @@ The _**yaw_inertia_kgm2**_ parameter is has no default value, but an estimation 
 
 $$ I_{rect} = \frac{1}{12}m(b^2+h^2) $$
 
-The product of the previous expression is multiplied by _**yaw_inertia_multiplier**_ and returned by the method.
+The product of the previous expression is multiplied by _**yaw_inertia_multiplier**_ and returned by the method:
+
+```python
+@dataclass
+class Vehicle:
+    
+    [...]
+    
+    def yaw_inertia_estimation_kgm2(self) -> float:
+
+        wheelbase_m = self.cg_to_front_m + self.cg_to_back_m
+        
+        track_mean_m = (self.track_front_m + self.track_back_m)/2
+        
+        rectangle_inertia_kgm2 = (
+            1/12*self.mass_kg*(track_mean_m**2 + wheelbase_m**2))
+
+        return rectangle_inertia_kgm2*self.yaw_inertia_multiplier
+```
 
 ### Tire Properties
 
@@ -147,7 +167,9 @@ class Tire:
 
 The geometric construction during a left-hand turn is shown below:
 
-![Steering Angle](images/steering_angle.png)
+<div align="center">
+    <img src="./images/steering_angle.png" width="50%" alt="Illustration of the used reference frames">
+</div>
 
 #### **Equations** (Steering Angles)
 
@@ -216,7 +238,7 @@ If the **double-track model** option is selected:
 
 The velocity at the front left wheel and its components is depicted below:
 
-![Slip Angle](images/slip_angle.png)
+<img src="./images/slip_angle.png" alt="Illustration of the used reference frames">
 
 #### **Equations** (StaticTire Slip Angles)
 

@@ -168,8 +168,8 @@ def calc_wheel_angles(
             alpha_f_rad = np.atan2(np.sin(beta) + dyaw_dt*lf/vel, 
                                     np.cos(beta)) - steer_f
             
-            alpha_b_rad = np.atan2(np.sin(beta) - dyaw_dt*lf/vel, 
-                                    np.cos(beta) - steer_b)
+            alpha_b_rad = np.atan2(np.sin(beta) - dyaw_dt*lb/vel, 
+                                    np.cos(beta)) - steer_b
         
         elif not single_track_on:
             alpha_fl_rad = \
@@ -1179,6 +1179,7 @@ def transient_maneuver(
             -Fcent[t_idx] / (car.mass_kg*velocity_m_s) - dyaw_dt[t_idx])
         
         dyaw_dt[t_idx+1] = dyaw_dt[t_idx] + (d2yaw_dt2[t_idx] * time_step_s)
+        
         d2yaw_dt2[t_idx+1] = Myaw[t_idx]/car.yaw_inertia_kgm2
 
         radius_of_turn[t_idx+1] = (velocity_m_s /
@@ -1789,9 +1790,9 @@ def plot_result_comparison(result_sets: list[ResultSet]) -> tuple[Figure, Axes]:
     fig, axs = plt.subplots(3, 3)
     fig.subplots_adjust(wspace=0.45, hspace=0.45)
     fig.set_size_inches(18,8)
-    fig.suptitle(
-        f'Vehicle Velocity = {result_sets[0].motion_state.velocity*3.6} km/h',
-        fontsize='xx-large')
+    fig.suptitle('Vehicle Velocity = ' +
+                  f'{(result_sets[0].motion_state.velocity*3.6):.1f} km/h',
+                  fontsize='xx-large')
 
     label_mapping = {(False, False): 'DT,LA',
                      (False, True): 'DT,SA',
