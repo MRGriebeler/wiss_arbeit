@@ -2,7 +2,68 @@
 
 ## Project Description
 
-This project uses Python to solve the movement equations governing lateral movement of a two-axle, front-axle-steered road vehicle using pneumatic tires.
+This project uses Python to solve the movement equations governing lateral movement of a two-axle, front-axle-steered road vehicle using pneumatic tires. Both single-track-model and double-track-model options are available. The calculations can be performed with or without the assumption of small angles. The tire is modeled as linear with transient slip angle build-up. Two simulations are available: steady state cornering and transient maneuver.
+
+## Requirements
+
+- **Python** 3.14.6
+- **numpy** 2.4.6
+- **matplotlib** 3.10.9
+- **scipy** 1.17.1
+
+## Table of Content
+
+1. [Reference Frames](#reference-frames)
+    - [Illustration](#illustration-reference-frames)
+    - [Angle Measurement](#angle-measurement)
+    - [Vehicle Reference Frame](#vehicle-reference-frame)
+    - [CG-Velocity Reference Frame](#cg-velocity-reference-frame)
+2. [Model Inputs](#model-inputs)
+    - [Vehicle Properties](#vehicle-properties)
+    - [Tire Properties](#tire-properties)
+3. [Calculation of Wheel Angles](#calculation-of-wheel-angles)
+    - [Steering Angles](#steering-angles)
+        - [Output](#output-steering-angles)
+        - [Input](#input-steering-angles)
+        - [Illustration](#illustration-steering-angles)
+        - [Equations](#equations-steering-angles)
+    - [Static Tire Slip Angles](#static-tire-slip-angles)
+        - [Output](#output-static-tire-slip-angles)
+        - [Input](#input-static-tire-slip-angles)
+        - [Illustration](#illustration-static-tire-slip-angles)
+        - [Equations](#equations-statictire-slip-angles)
+    - [Implementation](#implementation-calculation-of-wheel-angles)
+    - [Transient Tire Slip Angles](#transient-tire-slip-angles)
+        - [Output](#output-transient-tire-slip-angles)
+        - [Input](#input-transient-tire-slip-angles)
+        - [Equations](#equations-transient-tire-slip-angles)
+        - [Implementation](#implementation-transient-tire-slip-angles)
+4. [Calculation of Wheel Forces](#calculation-of-wheel-forces)
+    - [Input](#input-calculation-of-wheel-forces)
+    - [Wheel Forces in Vehicle Reference Frame](#wheel-forces-in-vehicle-reference-frame)
+        - [Output](#output-wheel-forces-in-vehicle-reference-frame)
+        - [Equations](#equations-wheel-forces-in-vehicle-reference-frame)
+    - [Wheel Forces in CG-Velocity Reference Frame](#wheel-forces-in-cg-velocity-reference-frame)
+        - [Output](#output-wheel-forces-in-cg-velocity-reference-frame)
+        - [Equations](#equations-wheel-forces-in-cg-velocity-reference-frame)
+    - [Implementation](#implementation-calculation-of-wheel-forces)
+5. [Calculation of Wheel Moments](#calculation-of-wheel-moments)
+    - [Input](#input-calculation-of-wheel-moments)
+    - [Output](#output-calculation-of-wheel-moments)
+    - [Equations](#calculation-of-wheel-moments)
+6. [Vehicle Motion State](#vehicle-motion-state)
+7. [Simulation Result Set](#simulation-result-set)
+8. [Steady State Cornering](#steady-state-cornering)
+    - [Description](#description-steady-state-cornering)
+    - [Output](#output-steady-state-cornering)
+    - [Input](#input-steady-state-cornering)
+    - [Implementation](#implementation-steady-state-cornering)
+9. [Transient Maneuver](#transient-maneuver)
+    - [Description](#description-transient-maneuver)
+    - [Output](#output-transient-maneuver)
+    - [Input](#input-transient-maneuver)
+
+<div class="page"></div>
 
 ## Reference Frames
 
@@ -60,6 +121,8 @@ class Tire:
     cornering_stiffness_NperRad: float = 30000.0
     relaxation_length_m: float = 0.3
 ```
+
+<div class="page"></div>
 
 ## Calculation of Wheel Angles
 
@@ -282,6 +345,8 @@ def calc_slip_ang_trans(
         ) -> float:
 ```
 
+<div class="page"></div>
+
 ## Calculation of Wheel Forces
 
 ### Input (Calculation of Wheel Forces)
@@ -452,6 +517,8 @@ class WheelForces:
     Ft_br:      numpy.typing.ArrayLike
 ```
 
+<div class="page"></div>
+
 ## Calculation of Wheel Moments
 
 ### Input (Calculation of Wheel Moments)
@@ -519,6 +586,8 @@ class WheelMoments:
     Myaw_br:        numpy.typing.ArrayLike
 ```
 
+<div class="page"></div>
+
 ## Vehicle Motion State
 
 The container object `MotionState` groups the necessary information to characterize the instantaneous motion state of a vehicle. The attributes of `MotionState` are:
@@ -580,6 +649,8 @@ class ResultSet:
     single_track_on: bool
     small_angles_on: bool
 ```
+
+<div class="page"></div>
 
 ## Steady State Cornering
 
@@ -731,6 +802,8 @@ The initial guesses for the four motion states are:
     $$ R_0 = \frac{l_f+l_b}{\delta} + k_\delta \frac{v^2}{\delta} $$
     $$ \beta_0 = \delta \frac{l_b + k_\beta v^2}{(l_f+l_b) + k_\delta v^2} $$
 
+<div class="page"></div>
+
 ## Transient Maneuver
 
 ### Description (Transient Maneuver)
@@ -745,9 +818,23 @@ where $J_z$ is the vehicle's yaw inertia.
 
 Differently than the steady [state cornering simulation](#steady-state-cornering), the transient maneuver simulation allows for the motion state of the vehicle to be specified uniquely as steering wheel angle $(\delta_{sw}(t))$ and CG-velocity $(v)$. The steering wheel angle can depend on time, but the velocity is constant.
 
+The system of differential equations is solved using first order forward integration. As such, the values for $\beta$ and $\dot\psi$ are estimated by
+
+$$ \beta_{(t+\Delta t)} = \beta_t + \dot\beta_{(t+\Delta t)} \Delta t $$
+
+$$ \dot\psi_{(t+\Delta t)} = \dot\psi_t + \ddot\psi_{(t+\Delta t)} \Delta t $$
+
 ### Output (Transient Maneuver)
 
-The **transient maneuver** simulation returns a `ResultSet` [container](#simulation-result-set).
+The **transient maneuver** simulation returns a `ResultSet` [container](#simulation-result-set). The `ResultSet` attributes `MotionState`, `WheelAngles`, `WheelForces` and `WheelMoments` are arrays. They can be indexed with brackets to return a slice or a scalar entity of the container which corresponds to the indexed time step or time range. For instance
+
+`motion_state_at_t_52 = result_set.motion_state[52]`
+
+The specific time instant to which the indexed container corresponds depends on the **simulation end time** and **time step**, which are used to define the simulation time array:
+
+`time = np.arange(0, time_end_s, time_step_s)`
+
+As such, `motion_state_at_t_52` would be the `MotionState` container for the time step `time[52]`.
 
 ### Input (Transient Maneuver)
 
@@ -756,7 +843,55 @@ The **transient maneuver** simulation returns a `ResultSet` [container](#simulat
 - `Tire` Back Axle: container with [tire properties](#tire-properties)
 - $t_{end}$ : Simulation end time
 - $\Delta t$ : Simulation time step
+- $(\beta_0,\dot\beta_0,\dot\psi_0,\ddot\psi_0)$ : Simulation initial conditions
 - $v$ : CG-Velocity magnitude (constant)
 - $\delta_{sw}(t)$ : Steering wheel angle as time array
 - **Single-Track-On**: boolean parameter for double- or single-track-model
 - **Small-Angles-On**: boolean parameter for small angle assumption
+
+### Implementation (Transient Maneuver)
+
+The previously described transient maneuver simulation is implemented as follows
+
+```python
+def transient_maneuver(
+        car: Vehicle,
+        *,
+        tire_front: Tire,
+        tire_rear: Tire,
+        time_end_s: float,
+        time_step_s: float,
+        initial_conditions_SI: InitialConditions = InitialConditions(0,0,0,0),
+        velocity_m_s: float,
+        steering_wheel_input_f_of_t_rad: npt.NDArray[np.float64],
+        single_track_on: bool = False,
+        small_angles_on: bool = False
+        ) -> ResultSet:
+```
+
+where `InitialConditions` is a container for the simulation initial conditions:
+
+```python
+@dataclass
+class InitialConditions:
+    side_slip_0: float
+    dyaw_dt_0: float
+    dside_slip_dt_0: float
+    d2yaw_dt2_0: float
+```
+
+The differential equation system is solved in a loop through `time = np.arange(0, time_end_s, time_step_s)`, in which $\beta$ and $\dot\psi$ are integrated as follows:
+
+```python
+side_slip[t_idx+1] = (
+            side_slip[t_idx] + (dside_slip_dt[t_idx] * time_step_s))
+        
+dside_slip_dt[t_idx+1] = (
+    -Fcent[t_idx] / (car.mass_kg*velocity_m_s) - dyaw_dt[t_idx])
+
+dyaw_dt[t_idx+1] = dyaw_dt[t_idx] + (d2yaw_dt2[t_idx] * time_step_s)
+
+d2yaw_dt2[t_idx+1] = Myaw[t_idx]/car.yaw_inertia_kgm2
+```
+
+which correspond to the previously detailed [equations](#description-transient-maneuver).
